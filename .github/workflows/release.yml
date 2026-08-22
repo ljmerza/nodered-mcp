@@ -1,10 +1,10 @@
 name: Release
 
 # Publishes to PyPI via OIDC trusted publishing, then cuts a GitHub Release.
-# No API token is stored anywhere: the `pypi` environment plus `id-token: write`
-# is what PyPI verifies.
+# The build, publish, and release steps live in ljmerza/misc-actions; this file
+# only wires them to this package.
 #
-#   test -> publish-pypi -> github-release
+#   test -> release (publish-pypi -> github-release)
 #
 # A tag whose PyPI publish failed is not "released".
 
@@ -26,68 +26,14 @@ jobs:
       coverage-source: nodered_mcp
     secrets: inherit
 
-  publish-pypi:
-    name: Build and publish to PyPI
+  release:
+    name: Publish
     needs: test
-    runs-on: ubuntu-latest
-    environment:
-      name: pypi
-      url: https://pypi.org/p/nodered-mcp
-    permissions:
-      id-token: write
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: astral-sh/setup-uv@v7
-        with:
-          enable-cache: true
-
-      - name: Check the tag matches the version in pyproject.toml
-        env:
-          REF_NAME: ${{ github.ref_name }}
-        run: |
-          TAG="${REF_NAME#v}"
-          PROJECT=$(grep -m1 '^version = ' pyproject.toml | cut -d'"' -f2)
-          if [ "$TAG" != "$PROJECT" ]; then
-            echo "::error::tag v$TAG does not match pyproject version $PROJECT"
-            exit 1
-          fi
-          echo "publishing version $PROJECT"
-
-      - name: Build
-        run: uv build
-
-      - uses: actions/upload-artifact@v7
-        with:
-          name: dist
-          path: dist/*
-
-      - name: Publish to PyPI via OIDC
-        uses: pypa/gh-action-pypi-publish@release/v1
-
-  github-release:
-    name: Create GitHub Release
-    needs: publish-pypi
-    runs-on: ubuntu-latest
     permissions:
       contents: write
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-
-      - uses: actions/download-artifact@v8
-        with:
-          name: dist
-          path: dist/
-
-      - name: Create release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REF_NAME: ${{ github.ref_name }}
-        run: |
-          gh release create "$REF_NAME" \
-            --title "nodered-mcp ${REF_NAME}" \
-            --generate-notes \
-            --verify-tag \
-            dist/*
+      id-token: write
+    uses: ljmerza/misc-actions/.github/workflows/python-release.yml@v2.2.0
+    with:
+      package-name: nodered-mcp
+      python-version: "3.12"
+    secrets: inherit
