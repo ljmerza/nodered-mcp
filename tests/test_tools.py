@@ -414,6 +414,16 @@ def test_config_nodes_stay_out_of_find_nodes(sess):
     assert "Home Assistant" not in names
 
 
+def test_an_unlisted_config_type_is_not_content_either(sess):
+    """CONFIG_TYPES names a handful of types; being off that list is not proof
+    of being flow content. A node with no tab and no coordinates is a config
+    node whatever it calls itself."""
+    cid = edit(op="create_config_node", node_type="tls-config", name="certs")["node_id"]
+    assert cid not in [n["id"] for n in find_nodes()["nodes"]]
+    assert "certs" not in query(op="ungrouped")
+    assert "certs" in query(op="configs")
+
+
 # ── enable, bulk update, splice, replace ──
 
 

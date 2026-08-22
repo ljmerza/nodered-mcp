@@ -125,7 +125,7 @@ class Flows(ReadMixin, NodeEditMixin, GroupMixin, TabMixin, LayoutMixin, Transfe
         ntype = n.get("type", "")
         if ntype in ("tab", "group", "subflow"):
             return False
-        if ntype in CONFIG_TYPES:
+        if self._is_config_node(n):
             return False
         if n.get("z", "") in self.subflow_defs:
             return False
