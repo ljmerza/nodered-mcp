@@ -30,10 +30,7 @@ from .config import build_parser, settings_from_args
 from .flows import DEFAULT_GROUP_STYLE, LayoutError
 from .session import FlowsSession, StaleFlowsError, capture, run
 
-mcp = FastMCP(
-    name="nodered",
-    instructions=__doc__,
-)
+mcp = FastMCP(name="nodered", instructions=__doc__)
 
 # Populated by main(); tests inject their own.
 SESSION: FlowsSession | None = None
@@ -72,23 +69,38 @@ def _node_summary(session_: FlowsSession, node: dict) -> dict:
 # Reads
 # ──────────────────────────────────────────────────────────────────────
 
+
 @mcp.tool
 def nodered_query(
     op: Annotated[
         Literal[
-            "summary", "groups", "tab", "group", "search", "ungrouped", "orphans",
-            "subflows", "styles", "entities", "inspect", "connections", "trace", "tabs",
+            "summary",
+            "groups",
+            "tab",
+            "group",
+            "search",
+            "ungrouped",
+            "orphans",
+            "subflows",
+            "styles",
+            "entities",
+            "inspect",
+            "connections",
+            "trace",
+            "tabs",
         ],
-        Field(description=(
-            "summary: counts per tab. groups: every group by tab. tab/group/search: "
-            "need `target` (substring match). ungrouped/orphans/subflows/styles/"
-            "entities/tabs: no target. inspect/connections/trace: need `target` = a "
-            "node id."
-        )),
+        Field(
+            description=(
+                "summary: counts per tab. groups: every group by tab. tab/group/search: "
+                "need `target` (substring match). ungrouped/orphans/subflows/styles/"
+                "entities/tabs: no target. inspect/connections/trace: need `target` = a "
+                "node id."
+            )
+        ),
     ],
-    target: Annotated[str | None, Field(
-        description="Tab name, group name, search term, or node id, depending on op.",
-    )] = None,
+    target: Annotated[
+        str | None, Field(description="Tab name, group name, search term, or node id, depending on op.")
+    ] = None,
     max_depth: Annotated[int, Field(description="trace only: how far to follow wires.")] = 20,
 ) -> str:
     """Read-only reports over the current flows, as human-readable text.
@@ -103,8 +115,12 @@ def nodered_query(
         return "\n".join(lines) or "(no tabs)"
 
     simple = {
-        "summary": f.summary, "groups": f.groups, "ungrouped": f.ungrouped,
-        "orphans": f.orphans, "subflows": f.subflows, "styles": f.styles,
+        "summary": f.summary,
+        "groups": f.groups,
+        "ungrouped": f.ungrouped,
+        "orphans": f.orphans,
+        "subflows": f.subflows,
+        "styles": f.styles,
         "entities": f.entities,
     }
     if op in simple:
@@ -115,10 +131,16 @@ def nodered_query(
     if op == "trace":
         text, _ = run(f.trace, target, max_depth=max_depth)
     else:
-        text, _ = run({
-            "tab": f.tab, "group": f.group, "search": f.search,
-            "inspect": f.inspect, "connections": f.connections,
-        }[op], target)
+        text, _ = run(
+            {
+                "tab": f.tab,
+                "group": f.group,
+                "search": f.search,
+                "inspect": f.inspect,
+                "connections": f.connections,
+            }[op],
+            target,
+        )
     return text or "(no output)"
 
 
@@ -134,8 +156,7 @@ def nodered_find_nodes(
     Use this when you need node ids to feed into nodered_edit / nodered_group.
     """
     s = session()
-    _, nodes = run(s.flows.find_nodes, tab_id=tab_id, node_type=node_type,
-                   name_contains=name_contains)
+    _, nodes = run(s.flows.find_nodes, tab_id=tab_id, node_type=node_type, name_contains=name_contains)
     return {
         "count": len(nodes),
         "truncated": len(nodes) > limit,
@@ -144,9 +165,7 @@ def nodered_find_nodes(
 
 
 @mcp.tool
-def nodered_get_node(
-    node_id: Annotated[str, Field(description="The node id to fetch.")],
-) -> dict:
+def nodered_get_node(node_id: Annotated[str, Field(description="The node id to fetch.")]) -> dict:
     """One node's complete raw JSON, plus its tab, group, and wiring context."""
     s = session()
     f = s.flows
@@ -158,64 +177,78 @@ def nodered_get_node(
     for n in f.nodes:
         for i, wire_set in enumerate(n.get("wires", []) or []):
             if node_id in wire_set:
-                inbound.append({"from": n["id"], "name": n.get("name", ""),
-                                "type": n.get("type"), "output": i})
+                inbound.append(
+                    {"from": n["id"], "name": n.get("name", ""), "type": n.get("type"), "output": i}
+                )
     outbound = []
     for i, wire_set in enumerate(node.get("wires", []) or []):
         for tid in wire_set:
             t = f.get_node(tid)
-            outbound.append({"output": i, "to": tid,
-                             "name": (t or {}).get("name", ""),
-                             "type": (t or {}).get("type"),
-                             "missing": t is None})
-    return {
-        "context": _node_summary(s, node),
-        "node": node,
-        "wires_in": inbound,
-        "wires_out": outbound,
-    }
+            outbound.append(
+                {
+                    "output": i,
+                    "to": tid,
+                    "name": (t or {}).get("name", ""),
+                    "type": (t or {}).get("type"),
+                    "missing": t is None,
+                }
+            )
+    return {"context": _node_summary(s, node), "node": node, "wires_in": inbound, "wires_out": outbound}
 
 
 # ──────────────────────────────────────────────────────────────────────
 # Node-level edits
 # ──────────────────────────────────────────────────────────────────────
 
+
 @mcp.tool
 def nodered_edit(
     op: Annotated[
-        Literal["create_node", "update_node", "delete_node", "rename_node",
-                "duplicate_node", "wire", "unwire", "import_nodes", "export_group"],
-        Field(description=(
-            "create_node: tab_id + node_type + name (+ config/x/y/group_id). "
-            "update_node: node_id + props. delete_node/rename_node/duplicate_node: "
-            "node_id. wire/unwire: source_id + target_id (+ output_index). "
-            "import_nodes: json_path + tab_id. export_group: name (+ output_path)."
-        )),
+        Literal[
+            "create_node",
+            "update_node",
+            "delete_node",
+            "rename_node",
+            "duplicate_node",
+            "wire",
+            "unwire",
+            "import_nodes",
+            "export_group",
+        ],
+        Field(
+            description=(
+                "create_node: tab_id + node_type + name (+ config/x/y/group_id). "
+                "update_node: node_id + props. delete_node/rename_node/duplicate_node: "
+                "node_id. wire/unwire: source_id + target_id (+ output_index). "
+                "import_nodes: json_path + tab_id. export_group: name (+ output_path)."
+            )
+        ),
     ],
     node_id: Annotated[str | None, Field(description="Target node id.")] = None,
     tab_id: Annotated[str | None, Field(description="Tab id to place nodes on.")] = None,
     node_type: Annotated[str | None, Field(description="Node-RED type, e.g. 'switch'.")] = None,
     name: Annotated[str | None, Field(description="Node name, or group name for export_group.")] = None,
-    config: Annotated[dict | None, Field(
-        description="create_node: extra node properties merged in (func, rules, server, ...).",
-    )] = None,
-    props: Annotated[dict | None, Field(
-        description="update_node: properties to set on the existing node.",
-    )] = None,
+    config: Annotated[
+        dict | None,
+        Field(description="create_node: extra node properties merged in (func, rules, server, ...)."),
+    ] = None,
+    props: Annotated[
+        dict | None, Field(description="update_node: properties to set on the existing node.")
+    ] = None,
     x: Annotated[int, Field(description="create_node: canvas x.")] = 200,
     y: Annotated[int, Field(description="create_node: canvas y.")] = 200,
     group_id: Annotated[str | None, Field(description="Group to add the new/imported nodes to.")] = None,
     source_id: Annotated[str | None, Field(description="wire/unwire: source node id.")] = None,
     target_id: Annotated[str | None, Field(description="wire/unwire: target node id.")] = None,
-    output_index: Annotated[int | None, Field(
-        description="wire: output port (default 0). unwire: omit to cut every port.",
-    )] = None,
+    output_index: Annotated[
+        int | None, Field(description="wire: output port (default 0). unwire: omit to cut every port.")
+    ] = None,
     x_offset: Annotated[int, Field(description="duplicate_node: x offset for the clone.")] = 50,
     y_offset: Annotated[int, Field(description="duplicate_node: y offset for the clone.")] = 50,
     json_path: Annotated[str | None, Field(description="import_nodes: path to a JSON node list.")] = None,
-    output_path: Annotated[str | None, Field(
-        description="export_group: file to write (omit to return the nodes inline).",
-    )] = None,
+    output_path: Annotated[
+        str | None, Field(description="export_group: file to write (omit to return the nodes inline).")
+    ] = None,
     remap_ids: Annotated[bool, Field(description="import_nodes: assign fresh ids (default true).")] = True,
 ) -> dict:
     """Mutate nodes in memory. Nothing is written until nodered_session(op='save').
@@ -229,8 +262,9 @@ def nodered_edit(
     if op == "create_node":
         _need(tab_id, op, "tab_id")
         _need(node_type, op, "node_type")
-        text, new_id = run(f.create_node, tab_id, node_type, name or "",
-                           config=config, x=x, y=y, group_id=group_id)
+        text, new_id = run(
+            f.create_node, tab_id, node_type, name or "", config=config, x=x, y=y, group_id=group_id
+        )
         s.journal.record(f"create_node {node_type} '{name}' -> {new_id}")
         return {"ok": True, "node_id": new_id, "output": text}
 
@@ -279,17 +313,19 @@ def nodered_edit(
     if op == "import_nodes":
         _need(json_path, op, "json_path")
         _need(tab_id, op, "tab_id")
-        text, id_map = run(f.import_nodes, json_path, tab_id, group_id=group_id,
-                           remap_ids=remap_ids)
+        text, id_map = run(f.import_nodes, json_path, tab_id, group_id=group_id, remap_ids=remap_ids)
         s.journal.record(f"import_nodes {json_path} -> tab {tab_id}")
         return {"ok": True, "id_map": id_map, "output": text}
 
     if op == "export_group":
         _need(name, op, "name")
         text, exported = run(f.export_group, name, output_path)
-        return {"ok": True, "count": len(exported),
-                "nodes": None if output_path else exported,
-                "output": text if output_path else f"exported {len(exported)} nodes"}
+        return {
+            "ok": True,
+            "count": len(exported),
+            "nodes": None if output_path else exported,
+            "output": text if output_path else f"exported {len(exported)} nodes",
+        }
 
     raise ValueError(f"unknown op {op!r}")
 
@@ -298,29 +334,42 @@ def nodered_edit(
 # Group-level edits
 # ──────────────────────────────────────────────────────────────────────
 
+
 @mcp.tool
 def nodered_group(
     op: Annotated[
-        Literal["create", "add", "move_node", "rename", "set_style",
-                "normalize_styles", "refit", "shift", "bounds"],
-        Field(description=(
-            "create: name + tab_id + node_ids. add: group_id + node_ids. "
-            "move_node: node_id + group_id (null group_id ungroups). rename: "
-            "group_id + name. set_style/refit/bounds: group_id. shift: group_id "
-            "+ dx/dy. normalize_styles: no args."
-        )),
+        Literal[
+            "create",
+            "add",
+            "move_node",
+            "rename",
+            "set_style",
+            "normalize_styles",
+            "refit",
+            "shift",
+            "bounds",
+        ],
+        Field(
+            description=(
+                "create: name + tab_id + node_ids. add: group_id + node_ids. "
+                "move_node: node_id + group_id (null group_id ungroups). rename: "
+                "group_id + name. set_style/refit/bounds: group_id. shift: group_id "
+                "+ dx/dy. normalize_styles: no args."
+            )
+        ),
     ],
     group_id: Annotated[str | None, Field(description="Target group id.")] = None,
     name: Annotated[str | None, Field(description="Group label.")] = None,
     tab_id: Annotated[str | None, Field(description="Tab to create the group on.")] = None,
     node_ids: Annotated[list[str] | None, Field(description="Member node ids.")] = None,
     node_id: Annotated[str | None, Field(description="move_node: the node to move.")] = None,
-    style: Annotated[dict | None, Field(
-        description="Group style. Omit to use the house dark style -- do not invent fills.",
-    )] = None,
-    reflow: Annotated[bool, Field(
-        description="create: relocate the group if its box lands on another one (default true).",
-    )] = True,
+    style: Annotated[
+        dict | None,
+        Field(description="Group style. Omit to use the house dark style -- do not invent fills."),
+    ] = None,
+    reflow: Annotated[
+        bool, Field(description="create: relocate the group if its box lands on another one (default true).")
+    ] = True,
     dx: Annotated[int, Field(description="shift: horizontal delta.")] = 0,
     dy: Annotated[int, Field(description="shift: vertical delta.")] = 0,
 ) -> dict:
@@ -388,8 +437,17 @@ def nodered_group(
         _, box = run(f.group_bounds, group_id)
         if box is None:
             return {"ok": True, "bounds": None, "note": "group has no members with canvas size"}
-        return {"ok": True, "bounds": {"x1": box[0], "y1": box[1], "x2": box[2], "y2": box[3],
-                                       "w": box[2] - box[0], "h": box[3] - box[1]}}
+        return {
+            "ok": True,
+            "bounds": {
+                "x1": box[0],
+                "y1": box[1],
+                "x2": box[2],
+                "y2": box[3],
+                "w": box[2] - box[0],
+                "h": box[3] - box[1],
+            },
+        }
 
     raise ValueError(f"unknown op {op!r}")
 
@@ -398,29 +456,36 @@ def nodered_group(
 # Layout
 # ──────────────────────────────────────────────────────────────────────
 
+
 @mcp.tool
 def nodered_layout(
     op: Annotated[
         Literal["check", "free_region", "occupied", "fix"],
-        Field(description=(
-            "check: lint the canvas. free_region: claim empty space, needs "
-            "tab_id + w + h. occupied: rects already in use on tab_id. fix: "
-            "repair overlaps (dry run unless apply=true)."
-        )),
+        Field(
+            description=(
+                "check: lint the canvas. free_region: claim empty space, needs "
+                "tab_id + w + h. occupied: rects already in use on tab_id. fix: "
+                "repair overlaps (dry run unless apply=true)."
+            )
+        ),
     ],
     tab_id: Annotated[str | None, Field(description="Tab id (free_region, occupied).")] = None,
     tab: Annotated[str | None, Field(description="Tab label to limit check/fix to.")] = None,
     w: Annotated[int, Field(description="free_region: block width to reserve.")] = 0,
     h: Annotated[int, Field(description="free_region: block height to reserve.")] = 0,
     margin: Annotated[int, Field(description="free_region: clearance from existing content.")] = 40,
-    strategy: Annotated[Literal["below", "gap"], Field(
-        description="free_region: 'below' drops under everything (safe); 'gap' packs into a hole.",
-    )] = "below",
+    strategy: Annotated[
+        Literal["below", "gap"],
+        Field(description="free_region: 'below' drops under everything (safe); 'gap' packs into a hole."),
+    ] = "below",
     grid: Annotated[int, Field(description="free_region: snap grid (Node-RED uses 20).")] = 20,
-    fix_ops: Annotated[str, Field(
-        description="fix: 'boxes', 'move', or 'boxes,move'. Run 'boxes' alone at your peril "
-                    "-- refitting alone grows boxes so they swallow neighbouring nodes.",
-    )] = "boxes,move",
+    fix_ops: Annotated[
+        str,
+        Field(
+            description="fix: 'boxes', 'move', or 'boxes,move'. Run 'boxes' alone at your peril "
+            "-- refitting alone grows boxes so they swallow neighbouring nodes."
+        ),
+    ] = "boxes,move",
     apply: Annotated[bool, Field(description="fix: actually write (default false = dry run).")] = False,
 ) -> dict:
     """Canvas geometry: lint it, claim empty space, or repair collisions.
@@ -446,16 +511,22 @@ def nodered_layout(
         _need(tab_id, op, "tab_id")
         if w <= 0 or h <= 0:
             raise ValueError("op 'free_region' requires positive w and h")
-        _, (ox, oy) = run(f.free_region, tab_id, w, h, margin=margin,
-                          strategy=strategy, grid=grid)
-        return {"ok": True, "x": ox, "y": oy,
-                "note": "place nodes relative to this origin, e.g. x=x+200 for the next node"}
+        _, (ox, oy) = run(f.free_region, tab_id, w, h, margin=margin, strategy=strategy, grid=grid)
+        return {
+            "ok": True,
+            "x": ox,
+            "y": oy,
+            "note": "place nodes relative to this origin, e.g. x=x+200 for the next node",
+        }
 
     if op == "occupied":
         _need(tab_id, op, "tab_id")
         _, rects = run(f.occupied_rects, tab_id)
-        return {"ok": True, "count": len(rects),
-                "rects": [{"x1": r[0], "y1": r[1], "x2": r[2], "y2": r[3]} for r in rects]}
+        return {
+            "ok": True,
+            "count": len(rects),
+            "rects": [{"x1": r[0], "y1": r[1], "x2": r[2], "y2": r[3]} for r in rects],
+        }
 
     if op == "fix":
         if s.journal.dirty:
@@ -468,13 +539,14 @@ def nodered_layout(
         bad = [o for o in ops if o not in ("boxes", "move")]
         if bad:
             raise ValueError(f"unknown fix op(s): {','.join(bad)}")
-        text, (before, after) = run(layout.fix, s.settings.flows_path, ops=ops,
-                                    apply=apply, tab_filter=tab)
+        text, (before, after) = run(layout.fix, s.settings.flows_path, ops=ops, apply=apply, tab_filter=tab)
         if apply:
             s.reload()
         return {
-            "ok": True, "applied": apply,
-            "findings_before": len(before), "findings_after": len(after),
+            "ok": True,
+            "applied": apply,
+            "findings_before": len(before),
+            "findings_after": len(after),
             "output": text,
         }
 
@@ -485,25 +557,34 @@ def nodered_layout(
 # Session / commit
 # ──────────────────────────────────────────────────────────────────────
 
+
 @mcp.tool
 def nodered_session(
     op: Annotated[
         Literal["status", "save", "deploy", "reload"],
-        Field(description=(
-            "status: config + pending edits + whether the file changed on disk. "
-            "save: write flows.json. deploy: write, docker cp into the container, "
-            "and restart it. reload: discard pending edits and re-read from disk."
-        )),
+        Field(
+            description=(
+                "status: config + pending edits + whether the file changed on disk. "
+                "save: write flows.json. deploy: write, docker cp into the container, "
+                "and restart it. reload: discard pending edits and re-read from disk."
+            )
+        ),
     ] = "status",
-    allow_overlap: Annotated[bool, Field(
-        description="save/deploy: write even though the edit introduces a NEW layout "
-                    "error. "
-                    "Only for deliberate overlaps -- fix the placement first.",
-    )] = False,
-    force: Annotated[bool, Field(
-        description="save/deploy: overwrite flows.json even though it changed on disk "
-                    "since this session loaded it. Discards whoever wrote it.",
-    )] = False,
+    allow_overlap: Annotated[
+        bool,
+        Field(
+            description="save/deploy: write even though the edit introduces a NEW layout "
+            "error. "
+            "Only for deliberate overlaps -- fix the placement first."
+        ),
+    ] = False,
+    force: Annotated[
+        bool,
+        Field(
+            description="save/deploy: overwrite flows.json even though it changed on disk "
+            "since this session loaded it. Discards whoever wrote it."
+        ),
+    ] = False,
 ) -> dict:
     """Inspect and commit the editing session.
 
@@ -524,10 +605,14 @@ def nodered_session(
     try:
         text = s.commit(deploy=(op == "deploy"), allow_overlap=allow_overlap, force=force)
     except LayoutError as exc:
-        return {"ok": False, "error": "layout_gate", "message": str(exc),
-                "hint": "Use nodered_layout(op='free_region') to claim clear canvas, "
-                        "nodered_group(op='refit') to resize a group around its nodes, "
-                        "or pass allow_overlap=true if the overlap is deliberate."}
+        return {
+            "ok": False,
+            "error": "layout_gate",
+            "message": str(exc),
+            "hint": "Use nodered_layout(op='free_region') to claim clear canvas, "
+            "nodered_group(op='refit') to resize a group around its nodes, "
+            "or pass allow_overlap=true if the overlap is deliberate.",
+        }
     except StaleFlowsError as exc:
         return {"ok": False, "error": "stale_file", "message": str(exc)}
 

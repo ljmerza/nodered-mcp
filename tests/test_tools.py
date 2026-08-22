@@ -18,6 +18,7 @@ session_tool = server.nodered_session.fn
 
 # ── reads ──
 
+
 def test_tabs_lists_the_tab(sess):
     assert TAB in query(op="tabs")
     assert "Demo" in query(op="tabs")
@@ -79,6 +80,7 @@ def test_get_node_rejects_unknown_id(sess):
 
 # ── edits stay in memory until committed ──
 
+
 def test_edits_are_not_written_until_save(sess, on_disk):
     edit(op="rename_node", node_id=FUNC, name="renamed")
     assert sess.journal.dirty
@@ -106,10 +108,12 @@ def test_reload_discards_pending_edits(sess):
 
 def test_create_wire_and_save_roundtrip(sess, on_disk):
     origin = layout_tool(op="free_region", tab_id=TAB, w=600, h=120)
-    a = edit(op="create_node", tab_id=TAB, node_type="inject", name="new tick",
-             x=origin["x"], y=origin["y"])["node_id"]
-    b = edit(op="create_node", tab_id=TAB, node_type="debug", name="new out",
-             x=origin["x"] + 220, y=origin["y"])["node_id"]
+    a = edit(op="create_node", tab_id=TAB, node_type="inject", name="new tick", x=origin["x"], y=origin["y"])[
+        "node_id"
+    ]
+    b = edit(
+        op="create_node", tab_id=TAB, node_type="debug", name="new out", x=origin["x"] + 220, y=origin["y"]
+    )["node_id"]
     edit(op="wire", source_id=a, target_id=b)
 
     assert session_tool(op="save")["ok"] is True
@@ -141,8 +145,7 @@ def test_export_group_returns_members_inline(sess):
 
 
 def test_import_nodes_remaps_ids(sess, tmp_path):
-    payload = [{"id": "old1", "type": "debug", "name": "imported", "x": 100, "y": 900,
-                "wires": [[]]}]
+    payload = [{"id": "old1", "type": "debug", "name": "imported", "x": 100, "y": 900, "wires": [[]]}]
     src = tmp_path / "import.json"
     src.write_text(json.dumps(payload))
     res = edit(op="import_nodes", json_path=str(src), tab_id=TAB)
@@ -151,6 +154,7 @@ def test_import_nodes_remaps_ids(sess, tmp_path):
 
 
 # ── groups ──
+
 
 def test_create_group_uses_the_house_dark_style(sess):
     res = group(op="create", name="Loose", tab_id=TAB, node_ids=[SWITCH, ORPHAN, HA_NODE])
@@ -161,8 +165,7 @@ def test_create_group_uses_the_house_dark_style(sess):
 
 
 def test_created_group_box_covers_its_members(sess):
-    gid = group(op="create", name="Loose", tab_id=TAB,
-                node_ids=[SWITCH, ORPHAN, HA_NODE])["group_id"]
+    gid = group(op="create", name="Loose", tab_id=TAB, node_ids=[SWITCH, ORPHAN, HA_NODE])["group_id"]
     assert layout_tool(op="check")["errors"] == 0
     b = group(op="bounds", group_id=gid)["bounds"]
     g = sess.flows.get_node(gid)
@@ -191,6 +194,7 @@ def test_group_ops_validate_required_args(sess):
 
 
 # ── layout ──
+
 
 def test_free_region_lands_clear_of_existing_content(sess):
     origin = layout_tool(op="free_region", tab_id=TAB, w=400, h=100)
@@ -224,6 +228,7 @@ def test_fix_dry_run_writes_nothing(sess, on_disk):
 
 # ── the layout gate ──
 
+
 def _overlapping_group(sess):
     """Build a second group whose box sits on top of the fixture's group."""
     g = sess.flows.get_node(GROUP)
@@ -231,8 +236,7 @@ def _overlapping_group(sess):
     for i, nid in enumerate((SWITCH, ORPHAN)):
         sess.flows.update_node(nid, x=g["x"] + 60 + i * 120, y=g["y"] + 40)
         ids.append(nid)
-    return group(op="create", name="Collider", tab_id=TAB, node_ids=ids,
-                 reflow=False)["group_id"]
+    return group(op="create", name="Collider", tab_id=TAB, node_ids=ids, reflow=False)["group_id"]
 
 
 def test_save_is_refused_when_the_edit_overlaps_groups(sess, on_disk):
@@ -258,6 +262,7 @@ def test_reflow_avoids_the_overlap_without_an_override(sess):
 
 
 # ── the staleness guard ──
+
 
 def test_save_is_refused_when_the_file_changed_underneath(sess, flows_file, on_disk):
     edit(op="rename_node", node_id=FUNC, name="mine")
@@ -293,16 +298,19 @@ def test_session_assert_writable_raises_directly(sess, flows_file):
 
 # ── deploy ──
 
+
 def test_deploy_runs_the_configured_restart_command(sess, monkeypatch):
     calls = []
 
     def fake_run(cmd, **kwargs):
         calls.append(cmd)
+
         class R:
             returncode = 0
+
         return R()
 
-    monkeypatch.setattr("nodered_mcp.flows.subprocess.run", fake_run)
+    monkeypatch.setattr("nodered_mcp.persist.subprocess.run", fake_run)
     edit(op="rename_node", node_id=FUNC, name="deployed")
     assert session_tool(op="deploy")["ok"] is True
 
@@ -312,6 +320,7 @@ def test_deploy_runs_the_configured_restart_command(sess, monkeypatch):
 
 
 # ── stdout hygiene: nothing may leak onto the MCP framing channel ──
+
 
 def test_tools_do_not_print_to_stdout(sess, capsys):
     query(op="summary")

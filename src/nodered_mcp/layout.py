@@ -68,11 +68,31 @@ HIDDEN_LABEL_TYPES = {"link in", "link out"}
 # Node types with no input port. Only affects a +7px term inside a 20px
 # quantisation, so an omission here is nearly always invisible.
 NO_INPUT_TYPES = {
-    "inject", "mqtt in", "http in", "websocket in", "tcp in", "udp in",
-    "serial in", "watch", "status", "catch", "link in", "cronplus",
-    "server-state-changed", "server-events", "ha-time", "ha-tag",
-    "ha-webhook", "ha-device", "poll-state", "trigger-state", "ha-sentence",
-    "server-device", "big-timer", "time-range-switch", "sun-position",
+    "inject",
+    "mqtt in",
+    "http in",
+    "websocket in",
+    "tcp in",
+    "udp in",
+    "serial in",
+    "watch",
+    "status",
+    "catch",
+    "link in",
+    "cronplus",
+    "server-state-changed",
+    "server-events",
+    "ha-time",
+    "ha-tag",
+    "ha-webhook",
+    "ha-device",
+    "poll-state",
+    "trigger-state",
+    "ha-sentence",
+    "server-device",
+    "big-timer",
+    "time-range-switch",
+    "sun-position",
 }
 
 # Nodes drawn with a button. Inject's is on the left, debug's on the right;
@@ -87,12 +107,22 @@ ZERO_SIZE_TYPES = {"junction"}
 NON_CANVAS_TYPES = {"tab", "subflow", "group", "comment"}
 
 CONFIG_TYPES = {
-    "server", "mqtt-broker", "websocket-listener", "websocket-client",
-    "pushbullet-config", "GSheetConnection", "ha-device-config",
-    "ha-entity-config", "gauth",
+    "server",
+    "mqtt-broker",
+    "websocket-listener",
+    "websocket-client",
+    "pushbullet-config",
+    "GSheetConnection",
+    "ha-device-config",
+    "ha-entity-config",
+    "gauth",
 }
 
 # Helvetica AFM advance widths, units per 1000em.
+# fmt: off
+# A 100-entry glyph-width table. One entry per line would be 100 lines of
+# noise for data that is only ever read as a lookup, so the formatter is
+# switched off across it.
 _AFM = {
     " ": 278, "!": 278, '"': 355, "#": 556, "$": 556, "%": 889, "&": 667,
     "'": 191, "(": 333, ")": 333, "*": 389, "+": 584, ",": 278, "-": 333,
@@ -108,6 +138,7 @@ _AFM = {
     "o": 556, "p": 556, "q": 556, "r": 333, "s": 500, "t": 278, "u": 556,
     "v": 500, "w": 722, "x": 500, "y": 500, "z": 500,
 }
+# fmt: on
 for _d in "0123456789":
     _AFM[_d] = 556
 
@@ -116,8 +147,8 @@ FONT_SIZE = 14
 # plain Helvetica; see --calibrate for how this was checked against the 110
 # real groups in flows.json.
 CHAR_SCALE = 1.0
-_FALLBACK_WIDTH = 556   # unknown latin-ish glyph
-_WIDE_WIDTH = 1000      # emoji / CJK
+_FALLBACK_WIDTH = 556  # unknown latin-ish glyph
+_WIDE_WIDTH = 1000  # emoji / CJK
 
 
 def text_width(s):
@@ -133,9 +164,7 @@ def text_width(s):
 
 def subflow_names(nodes):
     """Map subflow id -> its name, for labelling subflow instance nodes."""
-    return {n["id"]: n.get("name", "")
-            for n in nodes
-            if isinstance(n, dict) and n.get("type") == "subflow"}
+    return {n["id"]: n.get("name", "") for n in nodes if isinstance(n, dict) and n.get("type") == "subflow"}
 
 
 def node_label(node, subflows=None):
@@ -204,12 +233,7 @@ def node_box(node, subflows=None):
 
 def group_rect(group):
     """Return (x1, y1, x2, y2) from a group's stored geometry."""
-    return (
-        group["x"],
-        group["y"],
-        group["x"] + group.get("w", 0),
-        group["y"] + group.get("h", 0),
-    )
+    return (group["x"], group["y"], group["x"] + group.get("w", 0), group["y"] + group.get("h", 0))
 
 
 def group_box_for(members, subflows=None):
@@ -308,8 +332,7 @@ def _ancestors(group, groups_by_id):
 
 def lint(nodes, checks=CHECKS, tab_filter=None):
     """Lint a flows.json node list. Returns a list of Finding."""
-    tabs = {n["id"]: n.get("label", n["id"])
-            for n in nodes if isinstance(n, dict) and n.get("type") == "tab"}
+    tabs = {n["id"]: n.get("label", n["id"]) for n in nodes if isinstance(n, dict) and n.get("type") == "tab"}
     groups = [n for n in nodes if isinstance(n, dict) and n.get("type") == "group"]
     groups_by_id = {g["id"]: g for g in groups}
     by_id = {n["id"]: n for n in nodes if isinstance(n, dict) and "id" in n}
@@ -343,14 +366,22 @@ def lint(nodes, checks=CHECKS, tab_filter=None):
                         continue
                     ov = intersect(group_rect(a), group_rect(b))
                     if ov:
-                        out.append(Finding(
-                            "group-overlap", SEVERITY["group-overlap"], tabs[z],
-                            f"'{a.get('name') or a['id']}' overlaps "
-                            f"'{b.get('name') or b['id']}' by {ov[0]:g}x{ov[1]:g}px",
-                            [a["id"], b["id"]],
-                            {"overlap_w": ov[0], "overlap_h": ov[1],
-                             "a": a.get("name"), "b": b.get("name")},
-                        ))
+                        out.append(
+                            Finding(
+                                "group-overlap",
+                                SEVERITY["group-overlap"],
+                                tabs[z],
+                                f"'{a.get('name') or a['id']}' overlaps "
+                                f"'{b.get('name') or b['id']}' by {ov[0]:g}x{ov[1]:g}px",
+                                [a["id"], b["id"]],
+                                {
+                                    "overlap_w": ov[0],
+                                    "overlap_h": ov[1],
+                                    "a": a.get("name"),
+                                    "b": b.get("name"),
+                                },
+                            )
+                        )
 
     if "group-escape" in checks:
         for z, gs in groups_by_tab.items():
@@ -365,16 +396,23 @@ def lint(nodes, checks=CHECKS, tab_filter=None):
                     if box is None:
                         continue
                     if not contains(stored, box):
-                        out.append(Finding(
-                            "group-escape", SEVERITY["group-escape"], tabs[z],
-                            f"'{m.get('name') or m.get('type')}' at "
-                            f"({m['x']:g},{m['y']:g}) sticks out of group "
-                            f"'{g.get('name') or g['id']}'",
-                            [g["id"], m["id"]],
-                            {"group": g.get("name"), "node": m.get("name"),
-                             "node_box": [round(v) for v in box],
-                             "group_box": [round(v) for v in stored]},
-                        ))
+                        out.append(
+                            Finding(
+                                "group-escape",
+                                SEVERITY["group-escape"],
+                                tabs[z],
+                                f"'{m.get('name') or m.get('type')}' at "
+                                f"({m['x']:g},{m['y']:g}) sticks out of group "
+                                f"'{g.get('name') or g['id']}'",
+                                [g["id"], m["id"]],
+                                {
+                                    "group": g.get("name"),
+                                    "node": m.get("name"),
+                                    "node_box": [round(v) for v in box],
+                                    "group_box": [round(v) for v in stored],
+                                },
+                            )
+                        )
 
     if "stray-in-group" in checks:
         for z, ns in nodes_by_tab.items():
@@ -390,17 +428,23 @@ def lint(nodes, checks=CHECKS, tab_filter=None):
                     if g["id"] in own_chain:
                         continue
                     if intersect(group_rect(g), box):
-                        out.append(Finding(
-                            "stray-in-group", SEVERITY["stray-in-group"], tabs[z],
-                            f"'{n.get('name') or n.get('type')}' at "
-                            f"({n['x']:g},{n['y']:g}) sits inside group "
-                            f"'{g.get('name') or g['id']}' but is not a member"
-                            + (f" (member of '{groups_by_id[own].get('name')}')"
-                               if own in groups_by_id else " (ungrouped)"),
-                            [g["id"], n["id"]],
-                            {"group": g.get("name"), "node": n.get("name"),
-                             "node_group": own},
-                        ))
+                        out.append(
+                            Finding(
+                                "stray-in-group",
+                                SEVERITY["stray-in-group"],
+                                tabs[z],
+                                f"'{n.get('name') or n.get('type')}' at "
+                                f"({n['x']:g},{n['y']:g}) sits inside group "
+                                f"'{g.get('name') or g['id']}' but is not a member"
+                                + (
+                                    f" (member of '{groups_by_id[own].get('name')}')"
+                                    if own in groups_by_id
+                                    else " (ungrouped)"
+                                ),
+                                [g["id"], n["id"]],
+                                {"group": g.get("name"), "node": n.get("name"), "node_group": own},
+                            )
+                        )
 
     if "node-overlap" in checks:
         for z, ns in nodes_by_tab.items():
@@ -415,14 +459,18 @@ def lint(nodes, checks=CHECKS, tab_filter=None):
                         break
                     ov = intersect(ab, bb)
                     if ov:
-                        out.append(Finding(
-                            "node-overlap", SEVERITY["node-overlap"], tabs[z],
-                            f"'{a.get('name') or a.get('type')}' ({a['x']:g},{a['y']:g}) "
-                            f"overlaps '{b.get('name') or b.get('type')}' "
-                            f"({b['x']:g},{b['y']:g}) by {ov[0]:g}x{ov[1]:g}px",
-                            [a["id"], b["id"]],
-                            {"overlap_w": ov[0], "overlap_h": ov[1]},
-                        ))
+                        out.append(
+                            Finding(
+                                "node-overlap",
+                                SEVERITY["node-overlap"],
+                                tabs[z],
+                                f"'{a.get('name') or a.get('type')}' ({a['x']:g},{a['y']:g}) "
+                                f"overlaps '{b.get('name') or b.get('type')}' "
+                                f"({b['x']:g},{b['y']:g}) by {ov[0]:g}x{ov[1]:g}px",
+                                [a["id"], b["id"]],
+                                {"overlap_w": ov[0], "overlap_h": ov[1]},
+                            )
+                        )
 
     out.sort(key=lambda f: (f.severity != "ERROR", f.tab, f.check, f.message))
     return out
@@ -437,9 +485,7 @@ def new_findings(before, after):
 def load(path=None):
     target = path or FLOWS_PATH
     if not target:
-        raise ValueError(
-            "No flows.json path given. Pass path=..., or set NODERED_FLOWS_PATH."
-        )
+        raise ValueError("No flows.json path given. Pass path=..., or set NODERED_FLOWS_PATH.")
     with open(target) as fh:
         return json.load(fh)
 
@@ -461,13 +507,15 @@ def calibrate(nodes):
         if computed is None:
             continue
         stored = group_rect(g)
-        rows.append((
-            g.get("name") or g["id"],
-            stored[0] - computed[0],   # +ve = stored box starts left of needed
-            stored[1] - computed[1],
-            computed[2] - stored[2],   # +ve = content overflows right edge
-            computed[3] - stored[3],
-        ))
+        rows.append(
+            (
+                g.get("name") or g["id"],
+                stored[0] - computed[0],  # +ve = stored box starts left of needed
+                stored[1] - computed[1],
+                computed[2] - stored[2],  # +ve = content overflows right edge
+                computed[3] - stored[3],
+            )
+        )
     if not rows:
         print("no groups with members")
         return
@@ -482,8 +530,10 @@ def calibrate(nodes):
         for name, _, _, dr, _ in worst:
             print(f"    {dr:8.1f}  {name}")
     slack_r = sorted(-r[3] for r in rows)
-    print(f"  right-edge slack: min={slack_r[0]:.0f} "
-          f"median={slack_r[len(slack_r)//2]:.0f} max={slack_r[-1]:.0f}")
+    print(
+        f"  right-edge slack: min={slack_r[0]:.0f} "
+        f"median={slack_r[len(slack_r) // 2]:.0f} max={slack_r[-1]:.0f}"
+    )
 
 
 def fix(path=None, ops=("boxes", "move"), apply=False, tab_filter=None):
@@ -501,26 +551,23 @@ def fix(path=None, ops=("boxes", "move"), apply=False, tab_filter=None):
 
     f = Flows(path)
     before = lint(f.nodes, tab_filter=tab_filter)
-    tabs = {n["id"]: n.get("label", n["id"])
-            for n in f.nodes if isinstance(n, dict) and n.get("type") == "tab"}
+    tabs = {
+        n["id"]: n.get("label", n["id"]) for n in f.nodes if isinstance(n, dict) and n.get("type") == "tab"
+    }
     changes = []
 
     if "boxes" in ops:
-        for g in [n for n in f.nodes
-                  if isinstance(n, dict) and n.get("type") == "group"]:
+        for g in [n for n in f.nodes if isinstance(n, dict) and n.get("type") == "group"]:
             if tab_filter and tabs.get(g.get("z")) != tab_filter:
                 continue
             old = (g["x"], g["y"], g.get("w"), g.get("h"))
             if f.refit_group(g["id"]):
                 new = (g["x"], g["y"], g["w"], g["h"])
-                changes.append(
-                    f"refit  [{tabs.get(g.get('z'), '?')}] '{g.get('name')}' "
-                    f"{old} -> {new}")
+                changes.append(f"refit  [{tabs.get(g.get('z'), '?')}] '{g.get('name')}' {old} -> {new}")
 
     if "move" in ops:
         for _ in range(20):
-            overlaps = [x for x in lint(f.nodes, checks=("group-overlap",),
-                                        tab_filter=tab_filter)]
+            overlaps = [x for x in lint(f.nodes, checks=("group-overlap",), tab_filter=tab_filter)]
             if not overlaps:
                 break
             finding = overlaps[0]
@@ -532,7 +579,8 @@ def fix(path=None, ops=("boxes", "move"), apply=False, tab_filter=None):
             f.shift_group(mover["id"], dx, dy)
             changes.append(
                 f"move   [{tabs.get(mover.get('z'), '?')}] '{mover.get('name')}' "
-                f"by ({dx:+g},{dy:+g}) -> ({nx},{ny})")
+                f"by ({dx:+g},{dy:+g}) -> ({nx},{ny})"
+            )
 
     after = lint(f.nodes, tab_filter=tab_filter)
 
@@ -590,18 +638,18 @@ def report(findings, quiet=False):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Lint Node-RED canvas layout.")
-    ap.add_argument("--path", default=FLOWS_PATH,
-                    help="flows.json to lint (default: $NODERED_FLOWS_PATH)")
+    ap.add_argument("--path", default=FLOWS_PATH, help="flows.json to lint (default: $NODERED_FLOWS_PATH)")
     ap.add_argument("--tab", help="limit to one tab by label")
     ap.add_argument("--check", help=f"comma-separated subset of {','.join(CHECKS)}")
     ap.add_argument("--json", action="store_true", help="emit findings as JSON")
     ap.add_argument("--quiet", action="store_true", help="print errors only")
-    ap.add_argument("--calibrate", action="store_true",
-                    help="validate the node width model against real groups")
-    ap.add_argument("--fix", metavar="OPS",
-                    help="repair layout: 'boxes', 'move', or 'boxes,move'")
-    ap.add_argument("--apply", action="store_true",
-                    help="with --fix, actually write flows.json (default: dry run)")
+    ap.add_argument(
+        "--calibrate", action="store_true", help="validate the node width model against real groups"
+    )
+    ap.add_argument("--fix", metavar="OPS", help="repair layout: 'boxes', 'move', or 'boxes,move'")
+    ap.add_argument(
+        "--apply", action="store_true", help="with --fix, actually write flows.json (default: dry run)"
+    )
     args = ap.parse_args(argv)
 
     if not args.path:

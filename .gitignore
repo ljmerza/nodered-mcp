@@ -8,4 +8,6 @@ build/
 .pytest_cache/
 .ruff_cache/
 .env
-uv.lock
+.coverage
+coverage.xml
+htmlcov/

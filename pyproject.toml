@@ -4,19 +4,35 @@ version = "0.1.0"
 description = "MCP server for reading, querying, and editing a Node-RED flows.json"
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [{ name = "Leonardo Merza", email = "ljmerza@gmail.com" }]
-keywords = ["mcp", "node-red", "home-assistant", "automation"]
+keywords = ["mcp", "model-context-protocol", "node-red", "home-assistant", "automation"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Home Automation",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
 dependencies = [
     "fastmcp>=2.8,<3",
 ]
 
+[project.urls]
+Homepage = "https://github.com/ljmerza/nodered-mcp"
+Repository = "https://github.com/ljmerza/nodered-mcp"
+Issues = "https://github.com/ljmerza/nodered-mcp/issues"
+
 [project.scripts]
 nodered-mcp = "nodered_mcp.server:main"
 
-[project.optional-dependencies]
+[dependency-groups]
 dev = [
     "pytest>=8",
+    "pytest-cov>=5",
     "ruff>=0.6",
 ]
 
@@ -33,6 +49,7 @@ src = ["src", "tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I"]
+
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

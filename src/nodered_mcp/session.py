@@ -119,8 +119,7 @@ class FlowsSession:
 
     # ── committing ──
 
-    def commit(self, deploy: bool = False, allow_overlap: bool = False,
-               force: bool = False) -> str:
+    def commit(self, deploy: bool = False, allow_overlap: bool = False, force: bool = False) -> str:
         self.assert_writable(force=force)
         with capture() as out:
             if deploy:

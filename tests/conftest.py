@@ -30,11 +30,7 @@ def flows_file(tmp_path):
 
 @pytest.fixture
 def settings(flows_file):
-    return Settings(
-        flows_path=str(flows_file),
-        container="test-nodered",
-        restart_cmd=["true"],
-    )
+    return Settings(flows_path=str(flows_file), container="test-nodered", restart_cmd=["true"])
 
 
 @pytest.fixture
@@ -48,6 +44,8 @@ def sess(settings, monkeypatch):
 @pytest.fixture
 def on_disk(flows_file):
     """Re-read flows.json from disk as a list of node dicts."""
+
     def read():
         return json.loads(flows_file.read_text())
+
     return read

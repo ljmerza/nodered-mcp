@@ -43,8 +43,7 @@ class Settings:
 
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
-        prog="nodered-mcp",
-        description="MCP server for reading and editing a Node-RED flows.json.",
+        prog="nodered-mcp", description="MCP server for reading and editing a Node-RED flows.json."
     )
     ap.add_argument(
         "--flows-path",
@@ -54,20 +53,19 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument(
         "--container",
         default=os.environ.get("NODERED_CONTAINER", DEFAULT_CONTAINER),
-        help=f"Node-RED container name for deploy (default: {DEFAULT_CONTAINER}). "
-             "Env: NODERED_CONTAINER",
+        help=f"Node-RED container name for deploy (default: {DEFAULT_CONTAINER}). Env: NODERED_CONTAINER",
     )
     ap.add_argument(
         "--container-flows-path",
         default=os.environ.get("NODERED_CONTAINER_FLOWS_PATH", DEFAULT_CONTAINER_FLOWS_PATH),
         help=f"flows.json path inside the container (default: {DEFAULT_CONTAINER_FLOWS_PATH}). "
-             "Env: NODERED_CONTAINER_FLOWS_PATH",
+        "Env: NODERED_CONTAINER_FLOWS_PATH",
     )
     ap.add_argument(
         "--restart-cmd",
         default=os.environ.get("NODERED_RESTART_CMD"),
         help="Shell-style restart command; '{container}' is substituted. "
-             "Default: docker restart <container>. Env: NODERED_RESTART_CMD",
+        "Default: docker restart <container>. Env: NODERED_RESTART_CMD",
     )
     ap.add_argument(
         "--transport",
