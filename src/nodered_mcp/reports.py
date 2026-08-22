@@ -215,6 +215,29 @@ class ReadMixin:
             count = instance_count.get(sf_id, 0)
             print(f"  {name:40s}  {count:2d} instances  id={sf_id}")
 
+    def config_nodes(self):
+        """List config nodes and the nodes that reference them.
+
+        A config node is what a flow node points at for a connection: the
+        Home Assistant `server`, an `mqtt-broker`, a `tls-config`. They never
+        appear on a canvas, so none of the tab-oriented reports show them.
+        """
+        configs = [n for n in self.nodes if self._is_config_node(n)]
+        if not configs:
+            print("No config nodes")
+            return []
+
+        print(f"Config nodes ({len(configs)}):\n")
+        for c in sorted(configs, key=lambda n: (n.get("type", ""), n.get("name", ""))):
+            refs = self._references_to(c["id"])
+            label = c.get("name") or "(unnamed)"
+            print(f"  [{c.get('type')}] {label}  id={c['id']}  {len(refs)} reference(s)")
+            for r in refs[:5]:
+                print(f"       <- [{r['type']}] {r['name'] or r['id']} via .{r['property']}")
+            if len(refs) > 5:
+                print(f"       ... and {len(refs) - 5} more")
+        return configs
+
     def styles(self):
         """Show group style distribution."""
         style_groups = defaultdict(list)

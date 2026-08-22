@@ -75,6 +75,7 @@ from .nodes import NodeEditMixin
 from .persist import PersistMixin
 from .placement import LayoutMixin
 from .reports import ReadMixin
+from .tabs import TabMixin
 from .transfer import TransferMixin
 
 # Re-exported so `from nodered_mcp.flows import DEFAULT_GROUP_STYLE, LayoutError`
@@ -82,7 +83,7 @@ from .transfer import TransferMixin
 __all__ = ["DEFAULT_GROUP_STYLE", "CONFIG_TYPES", "FLOWS_PATH", "Flows", "LayoutError", "main"]
 
 
-class Flows(ReadMixin, NodeEditMixin, GroupMixin, LayoutMixin, TransferMixin, PersistMixin):
+class Flows(ReadMixin, NodeEditMixin, GroupMixin, TabMixin, LayoutMixin, TransferMixin, PersistMixin):
     """One loaded flows.json, with the whole editing surface attached.
 
     The mixin order is presentation-only -- no method is defined twice, so
@@ -129,6 +130,58 @@ class Flows(ReadMixin, NodeEditMixin, GroupMixin, LayoutMixin, TransferMixin, Pe
         if n.get("z", "") in self.subflow_defs:
             return False
         return True
+
+    def _is_config_node(self, n):
+        """True if the node is a config node: real, but never on a canvas.
+
+        Structural rather than a type allowlist, so an mqtt-broker and a
+        tls-config both qualify even though only one of them is named in
+        CONFIG_TYPES: a config node belongs to no tab and has no coordinates.
+        """
+        if not isinstance(n, dict):
+            return False
+        if n.get("type") in ("tab", "group", "subflow"):
+            return False
+        if n.get("type") in CONFIG_TYPES:
+            return True
+        return not n.get("z") and "x" not in n and "y" not in n
+
+    def _references_to(self, node_id):
+        """Nodes holding node_id in one of their property values.
+
+        This is how a config node is used: the referring node stores the
+        config node's id under a property like `server` or `broker`.
+        """
+        out = []
+        for n in self.nodes:
+            if not isinstance(n, dict) or n.get("id") == node_id:
+                continue
+            for key, value in n.items():
+                if key in ("id", "wires", "nodes") or value != node_id:
+                    continue
+                out.append(
+                    {
+                        "id": n["id"],
+                        "type": n.get("type"),
+                        "name": n.get("name", ""),
+                        "property": key,
+                    }
+                )
+                break
+        return out
+
+    def _strip_references(self, ids):
+        """Scrub a set of deleted ids out of wires, groups, and link targets."""
+        for n in self.nodes:
+            if not isinstance(n, dict):
+                continue
+            for wire_set in n.get("wires", []) or []:
+                for dead in [w for w in wire_set if w in ids]:
+                    wire_set.remove(dead)
+            if n.get("type") == "group" and n.get("nodes"):
+                n["nodes"] = [x for x in n["nodes"] if x not in ids]
+            if isinstance(n.get("links"), list):
+                n["links"] = [x for x in n["links"] if x not in ids]
 
     def _tab_name(self, node):
         return self.tabs.get(node.get("z", ""), "?")

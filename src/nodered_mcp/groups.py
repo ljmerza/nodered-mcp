@@ -131,6 +131,53 @@ class GroupMixin:
 
         self._index()
 
+    def delete_group(self, group_id, delete_nodes=False):
+        """Delete a group box. Its members are released, or deleted with it.
+
+        Args:
+            group_id: The group to remove.
+            delete_nodes: Delete the members too. Without this they stay on
+                the canvas exactly where they are, just ungrouped.
+        Returns:
+            How many members the group had.
+        """
+        grp = self.by_id.get(group_id)
+        if not grp or grp.get("type") != "group":
+            raise ValueError(f"Group {group_id} not found")
+
+        name = grp.get("name", group_id)
+        members = list(grp.get("nodes", []))
+
+        if delete_nodes:
+            for nid in members:
+                member = self.by_id.get(nid)
+                if member is None:
+                    continue
+                # A nested group takes its own members with it.
+                if member.get("type") == "group":
+                    self.delete_group(nid, delete_nodes=True)
+                else:
+                    self.delete_node(nid)
+        else:
+            for nid in members:
+                member = self.by_id.get(nid)
+                if member is not None:
+                    member.pop("g", None)
+
+        # Nested groups point back at this one through `g`.
+        for n in self.nodes:
+            if n.get("type") == "group" and n.get("g") == group_id:
+                n.pop("g", None)
+
+        if grp in self.nodes:
+            self.nodes.remove(grp)
+        self._strip_references({group_id})
+        self._index()
+
+        verb = "deleted" if delete_nodes else "released"
+        print(f"Deleted group '{name}' ({len(members)} member(s) {verb})")
+        return len(members)
+
     def set_group_name(self, group_id, name):
         """Set or update a group's name."""
         for n in self.nodes:

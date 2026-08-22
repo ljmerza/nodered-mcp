@@ -24,14 +24,19 @@ container name, and restart command are all configuration.
 
 ## Features
 
-- **Query** — tabs, groups, orphaned nodes, subflows, referenced Home Assistant
-  entities, and wire traces through a flow.
-- **Edit** — create, update, delete, rename, and duplicate nodes; wire and
-  unwire them; create, populate, and restyle groups; import and export node sets.
+- **Query** — tabs, groups, orphaned nodes, subflows, config nodes and who
+  references them, referenced Home Assistant entities, and wire traces through
+  a flow.
+- **Edit** — create, update, delete, rename, and duplicate nodes; enable and
+  disable them; wire and unwire them; splice one into an existing wire or route
+  traffic around it; create, populate, restyle, and delete groups; create,
+  rename, reorder, and delete tabs; import and export node sets.
 - **Place** — claim empty canvas before creating nodes instead of guessing
   coordinates, lint the canvas for collisions, and repair overlaps.
 - **Commit deliberately** — edits accumulate in memory and reach disk only when
   you ask, so a multi-node build lands as one unit.
+- **Look before you write** — `diff` shows exactly what the pending edits would
+  change, and `undo` walks them back one call at a time.
 - **Two guards** the underlying scripts never needed: a layout gate that refuses
   writes which introduce new collisions, and a staleness check that refuses to
   overwrite a `flows.json` someone deployed from the browser.
@@ -101,17 +106,18 @@ NODERED_RESTART_CMD="docker compose restart {container}"
 
 ## Tools
 
-Seven tools, each dispatching on an `op` argument.
+Eight tools, each dispatching on an `op` argument.
 
 | Tool | Ops |
 |---|---|
-| `nodered_query` | `summary`, `tabs`, `groups`, `tab`, `group`, `search`, `ungrouped`, `orphans`, `subflows`, `styles`, `entities`, `inspect`, `connections`, `trace` |
+| `nodered_query` | `summary`, `tabs`, `groups`, `tab`, `group`, `search`, `ungrouped`, `orphans`, `subflows`, `styles`, `configs`, `entities`, `inspect`, `connections`, `trace` |
 | `nodered_find_nodes` | Structured search by tab, type, or name substring |
 | `nodered_get_node` | One node's raw JSON plus its wiring context |
-| `nodered_edit` | `create_node`, `update_node`, `delete_node`, `rename_node`, `duplicate_node`, `wire`, `unwire`, `import_nodes`, `export_group` |
-| `nodered_group` | `create`, `add`, `move_node`, `rename`, `set_style`, `normalize_styles`, `refit`, `shift`, `bounds` |
+| `nodered_edit` | `create_node`, `create_config_node`, `update_node`, `update_many`, `delete_node`, `rename_node`, `set_enabled`, `duplicate_node`, `replace_node`, `wire`, `unwire`, `insert_between`, `bypass`, `import_nodes`, `export_group` |
+| `nodered_group` | `create`, `add`, `move_node`, `delete`, `rename`, `set_style`, `normalize_styles`, `refit`, `shift`, `bounds` |
+| `nodered_tab` | `create`, `rename`, `delete`, `reorder`, `set_enabled`, `set_info` |
 | `nodered_layout` | `check`, `free_region`, `occupied`, `fix` |
-| `nodered_session` | `status`, `save`, `deploy`, `reload` |
+| `nodered_session` | `status`, `diff`, `undo`, `save`, `deploy`, `reload` |
 
 ### A typical build
 
@@ -193,14 +199,15 @@ f.save()
 
 ```
 src/nodered_mcp/
-├── server.py       FastMCP server: the seven tools
+├── server.py       FastMCP server: the eight tools
 ├── session.py      in-memory session, stdout capture, staleness guard
 ├── config.py       CLI flags and environment resolution
 ├── flows.py        the Flows class, composed from the mixins below
 ├── constants.py    defaults, the group style, LayoutError
 ├── reports.py      ReadMixin      — summary, tab, group, search, trace
 ├── nodes.py        NodeEditMixin  — create/update/delete/wire nodes
-├── groups.py       GroupMixin     — create and populate group boxes
+├── groups.py       GroupMixin     — create, populate, and delete group boxes
+├── tabs.py         TabMixin       — create, rename, reorder, and delete tabs
 ├── placement.py    LayoutMixin    — claim free canvas, measure and refit boxes
 ├── transfer.py     TransferMixin  — import and export node sets
 ├── persist.py      PersistMixin   — save, deploy, and the layout gate
@@ -214,7 +221,7 @@ src/nodered_mcp/
 
 ```bash
 uv sync --group dev
-uv run pytest                    # 49 tests
+uv run pytest                    # 80 tests
 uv run ruff check .
 uv run ruff format --check .
 ```

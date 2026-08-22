@@ -1,14 +1,15 @@
 """FastMCP server exposing a Node-RED flows.json as MCP tools.
 
-Seven tools, each dispatching on an `op` argument:
+Eight tools, each dispatching on an `op` argument:
 
     nodered_query      read-only reports (summary, tab, group, search, trace...)
     nodered_find_nodes structured node search
     nodered_get_node   one node's raw JSON plus its context
-    nodered_edit       node-level mutations (create/update/delete/wire/import)
-    nodered_group      group-level mutations (create/add/move/refit/shift)
+    nodered_edit       node-level mutations (create/update/delete/wire/splice)
+    nodered_group      group-level mutations (create/add/move/refit/delete)
+    nodered_tab        tab lifecycle (create/rename/delete/reorder/enable)
     nodered_layout     canvas geometry: lint, claim free space, repair
-    nodered_session    status / save / deploy / reload
+    nodered_session    status / diff / undo / save / deploy / reload
 
 Edits accumulate in memory. Nothing reaches flows.json until
 `nodered_session(op="save")` or `op="deploy"`, so a multi-node build is
@@ -18,6 +19,7 @@ canvas -- the same lifecycle the hand-written build scripts use.
 
 from __future__ import annotations
 
+import functools
 import json
 import sys
 from typing import Annotated, Any, Literal
@@ -40,6 +42,22 @@ def session() -> FlowsSession:
     if SESSION is None:
         raise RuntimeError("nodered-mcp: no session configured (server not started)")
     return SESSION
+
+
+def undoable(fn):
+    """Snapshot the flows before a mutating tool runs, so it can be undone.
+
+    Applied under @mcp.tool, so the registered callable is the wrapper and
+    every mutation -- whichever op the tool dispatches to -- gets a step on
+    the session's undo stack.
+    """
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        with session().undoable():
+            return fn(*args, **kwargs)
+
+    return wrapper
 
 
 def _need(value: Any, op: str, name: str) -> Any:
@@ -83,6 +101,7 @@ def nodered_query(
             "orphans",
             "subflows",
             "styles",
+            "configs",
             "entities",
             "inspect",
             "connections",
@@ -93,8 +112,9 @@ def nodered_query(
             description=(
                 "summary: counts per tab. groups: every group by tab. tab/group/search: "
                 "need `target` (substring match). ungrouped/orphans/subflows/styles/"
-                "entities/tabs: no target. inspect/connections/trace: need `target` = a "
-                "node id."
+                "configs/entities/tabs: no target. configs lists config nodes (servers, "
+                "brokers) and who references them. inspect/connections/trace: need "
+                "`target` = a node id."
             )
         ),
     ],
@@ -121,6 +141,7 @@ def nodered_query(
         "orphans": f.orphans,
         "subflows": f.subflows,
         "styles": f.styles,
+        "configs": f.config_nodes,
         "entities": f.entities,
     }
     if op in simple:
@@ -202,29 +223,44 @@ def nodered_get_node(node_id: Annotated[str, Field(description="The node id to f
 
 
 @mcp.tool
+@undoable
 def nodered_edit(
     op: Annotated[
         Literal[
             "create_node",
+            "create_config_node",
             "update_node",
+            "update_many",
             "delete_node",
             "rename_node",
+            "set_enabled",
             "duplicate_node",
+            "replace_node",
             "wire",
             "unwire",
+            "insert_between",
+            "bypass",
             "import_nodes",
             "export_group",
         ],
         Field(
             description=(
                 "create_node: tab_id + node_type + name (+ config/x/y/group_id). "
-                "update_node: node_id + props. delete_node/rename_node/duplicate_node: "
-                "node_id. wire/unwire: source_id + target_id (+ output_index). "
-                "import_nodes: json_path + tab_id. export_group: name (+ output_path)."
+                "create_config_node: node_type + name (+ config) -- no tab, for "
+                "servers and brokers. update_node: node_id + props. update_many: "
+                "node_ids + props. delete_node/rename_node/duplicate_node: node_id. "
+                "set_enabled: node_id + enabled. replace_node: node_id + node_type "
+                "(keeps id, position, and wiring). wire/unwire: source_id + target_id "
+                "(+ output_index). insert_between: source_id + target_id + "
+                "new_node_id. bypass: node_id (+ delete). import_nodes: json_path + "
+                "tab_id. export_group: name (+ output_path)."
             )
         ),
     ],
     node_id: Annotated[str | None, Field(description="Target node id.")] = None,
+    node_ids: Annotated[
+        list[str] | None, Field(description="update_many: every node to apply `props` to.")
+    ] = None,
     tab_id: Annotated[str | None, Field(description="Tab id to place nodes on.")] = None,
     node_type: Annotated[str | None, Field(description="Node-RED type, e.g. 'switch'.")] = None,
     name: Annotated[str | None, Field(description="Node name, or group name for export_group.")] = None,
@@ -243,6 +279,15 @@ def nodered_edit(
     output_index: Annotated[
         int | None, Field(description="wire: output port (default 0). unwire: omit to cut every port.")
     ] = None,
+    new_node_id: Annotated[
+        str | None, Field(description="insert_between: the existing node to splice into the wire.")
+    ] = None,
+    enabled: Annotated[
+        bool, Field(description="set_enabled: true re-enables, false marks the node disabled.")
+    ] = True,
+    delete: Annotated[
+        bool, Field(description="bypass: also delete the node once traffic routes past it.")
+    ] = False,
     x_offset: Annotated[int, Field(description="duplicate_node: x offset for the clone.")] = 50,
     y_offset: Annotated[int, Field(description="duplicate_node: y offset for the clone.")] = 50,
     json_path: Annotated[str | None, Field(description="import_nodes: path to a JSON node list.")] = None,
@@ -268,12 +313,25 @@ def nodered_edit(
         s.journal.record(f"create_node {node_type} '{name}' -> {new_id}")
         return {"ok": True, "node_id": new_id, "output": text}
 
+    if op == "create_config_node":
+        _need(node_type, op, "node_type")
+        text, new_id = run(f.create_config_node, node_type, name or "", config=config)
+        s.journal.record(f"create_config_node {node_type} '{name}' -> {new_id}")
+        return {"ok": True, "node_id": new_id, "output": text}
+
     if op == "update_node":
         _need(node_id, op, "node_id")
         _need(props, op, "props")
         text, _ = run(f.update_node, node_id, **props)
         s.journal.record(f"update_node {node_id} {sorted(props)}")
         return {"ok": True, "node_id": node_id, "updated": sorted(props), "output": text}
+
+    if op == "update_many":
+        _need(node_ids, op, "node_ids")
+        _need(props, op, "props")
+        text, count = run(f.update_many, node_ids, props)
+        s.journal.record(f"update_many {count} node(s) {sorted(props)}")
+        return {"ok": True, "count": count, "updated": sorted(props), "output": text}
 
     if op == "delete_node":
         _need(node_id, op, "node_id")
@@ -289,11 +347,24 @@ def nodered_edit(
         s.journal.record(f"rename_node {node_id} -> '{name}'")
         return {"ok": True, "node_id": node_id, "output": text}
 
+    if op == "set_enabled":
+        _need(node_id, op, "node_id")
+        text, _ = run(f.set_node_enabled, node_id, enabled)
+        s.journal.record(f"set_enabled {node_id} -> {enabled}")
+        return {"ok": True, "node_id": node_id, "enabled": enabled, "output": text}
+
     if op == "duplicate_node":
         _need(node_id, op, "node_id")
         text, new_id = run(f.duplicate_node, node_id, x_offset=x_offset, y_offset=y_offset)
         s.journal.record(f"duplicate_node {node_id} -> {new_id}")
         return {"ok": True, "node_id": new_id, "output": text}
+
+    if op == "replace_node":
+        _need(node_id, op, "node_id")
+        _need(node_type, op, "node_type")
+        text, _ = run(f.replace_node, node_id, node_type, name=name, config=config)
+        s.journal.record(f"replace_node {node_id} -> {node_type}")
+        return {"ok": True, "node_id": node_id, "output": text}
 
     if op == "wire":
         _need(source_id, op, "source_id")
@@ -309,6 +380,20 @@ def nodered_edit(
         text, _ = run(f.unwire_nodes, source_id, target_id, output_index=output_index)
         s.journal.record(f"unwire {source_id} -x-> {target_id}")
         return {"ok": True, "output": text}
+
+    if op == "insert_between":
+        _need(source_id, op, "source_id")
+        _need(target_id, op, "target_id")
+        _need(new_node_id, op, "new_node_id")
+        text, ports = run(f.insert_between, source_id, target_id, new_node_id, output_index=output_index)
+        s.journal.record(f"insert_between {source_id} -> {new_node_id} -> {target_id}")
+        return {"ok": True, "ports": ports, "output": text}
+
+    if op == "bypass":
+        _need(node_id, op, "node_id")
+        text, info = run(f.bypass_node, node_id, delete=delete)
+        s.journal.record(f"bypass {node_id}" + (" and delete" if delete else ""))
+        return {"ok": True, **info, "output": text}
 
     if op == "import_nodes":
         _need(json_path, op, "json_path")
@@ -336,12 +421,14 @@ def nodered_edit(
 
 
 @mcp.tool
+@undoable
 def nodered_group(
     op: Annotated[
         Literal[
             "create",
             "add",
             "move_node",
+            "delete",
             "rename",
             "set_style",
             "normalize_styles",
@@ -352,9 +439,10 @@ def nodered_group(
         Field(
             description=(
                 "create: name + tab_id + node_ids. add: group_id + node_ids. "
-                "move_node: node_id + group_id (null group_id ungroups). rename: "
-                "group_id + name. set_style/refit/bounds: group_id. shift: group_id "
-                "+ dx/dy. normalize_styles: no args."
+                "move_node: node_id + group_id (null group_id ungroups). delete: "
+                "group_id (+ delete_nodes to remove the members too, otherwise they "
+                "stay put, ungrouped). rename: group_id + name. set_style/refit/"
+                "bounds: group_id. shift: group_id + dx/dy. normalize_styles: no args."
             )
         ),
     ],
@@ -372,6 +460,9 @@ def nodered_group(
     ] = True,
     dx: Annotated[int, Field(description="shift: horizontal delta.")] = 0,
     dy: Annotated[int, Field(description="shift: vertical delta.")] = 0,
+    delete_nodes: Annotated[
+        bool, Field(description="delete: delete the members too, not just the box.")
+    ] = False,
 ) -> dict:
     """Create and manipulate groups. In memory until nodered_session(op='save').
 
@@ -400,6 +491,12 @@ def nodered_group(
         text, _ = run(f.move_to_group, node_id, group_id)
         s.journal.record(f"move_to_group {node_id} -> {group_id or '(ungrouped)'}")
         return {"ok": True, "output": text}
+
+    if op == "delete":
+        _need(group_id, op, "group_id")
+        text, members = run(f.delete_group, group_id, delete_nodes=delete_nodes)
+        s.journal.record(f"delete_group {group_id}" + (" with members" if delete_nodes else ""))
+        return {"ok": True, "members": members, "deleted_members": delete_nodes, "output": text}
 
     if op == "rename":
         _need(group_id, op, "group_id")
@@ -448,6 +545,87 @@ def nodered_group(
                 "h": box[3] - box[1],
             },
         }
+
+    raise ValueError(f"unknown op {op!r}")
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Tabs
+# ──────────────────────────────────────────────────────────────────────
+
+
+@mcp.tool
+@undoable
+def nodered_tab(
+    op: Annotated[
+        Literal["create", "rename", "delete", "reorder", "set_enabled", "set_info"],
+        Field(
+            description=(
+                "create: label (+ info/disabled). rename: tab_id + label. delete: "
+                "tab_id (+ delete_nodes, required if the tab still holds nodes). "
+                "reorder: tab_ids, every tab id exactly once. set_enabled: tab_id + "
+                "enabled. set_info: tab_id + info."
+            )
+        ),
+    ],
+    tab_id: Annotated[str | None, Field(description="Target tab id.")] = None,
+    label: Annotated[str | None, Field(description="Tab name, for create and rename.")] = None,
+    info: Annotated[
+        str | None, Field(description="Markdown description shown in the editor's info panel.")
+    ] = None,
+    disabled: Annotated[bool, Field(description="create: start the tab disabled.")] = False,
+    enabled: Annotated[
+        bool, Field(description="set_enabled: false stops everything on the tab running.")
+    ] = True,
+    tab_ids: Annotated[
+        list[str] | None, Field(description="reorder: the full tab list, in the order you want.")
+    ] = None,
+    delete_nodes: Annotated[bool, Field(description="delete: also delete everything on the tab.")] = False,
+) -> dict:
+    """Create and manipulate tabs. In memory until nodered_session(op='save').
+
+    Use nodered_query(op='tabs') to read the current tabs and their ids.
+    """
+    s = session()
+    f = s.flows
+
+    if op == "create":
+        _need(label, op, "label")
+        text, new_id = run(f.create_tab, label, disabled=disabled, info=info or "")
+        s.journal.record(f"create_tab '{label}' -> {new_id}")
+        return {"ok": True, "tab_id": new_id, "output": text}
+
+    if op == "rename":
+        _need(tab_id, op, "tab_id")
+        _need(label, op, "label")
+        text, _ = run(f.set_tab_label, tab_id, label)
+        s.journal.record(f"rename_tab {tab_id} -> '{label}'")
+        return {"ok": True, "tab_id": tab_id, "output": text}
+
+    if op == "delete":
+        _need(tab_id, op, "tab_id")
+        text, removed = run(f.delete_tab, tab_id, delete_nodes=delete_nodes)
+        s.journal.record(f"delete_tab {tab_id} ({removed} node(s))")
+        return {"ok": True, "tab_id": tab_id, "nodes_deleted": removed, "output": text}
+
+    if op == "reorder":
+        _need(tab_ids, op, "tab_ids")
+        text, _ = run(f.reorder_tabs, tab_ids)
+        s.journal.record(f"reorder_tabs ({len(tab_ids)} tabs)")
+        return {"ok": True, "output": text}
+
+    if op == "set_enabled":
+        _need(tab_id, op, "tab_id")
+        text, _ = run(f.set_tab_enabled, tab_id, enabled)
+        s.journal.record(f"set_tab_enabled {tab_id} -> {enabled}")
+        return {"ok": True, "tab_id": tab_id, "enabled": enabled, "output": text}
+
+    if op == "set_info":
+        _need(tab_id, op, "tab_id")
+        _need(info, op, "info")
+        text, _ = run(f.set_tab_info, tab_id, info)
+        s.journal.record(f"set_tab_info {tab_id}")
+        return {"ok": True, "tab_id": tab_id, "output": text}
 
     raise ValueError(f"unknown op {op!r}")
 
@@ -561,12 +739,14 @@ def nodered_layout(
 @mcp.tool
 def nodered_session(
     op: Annotated[
-        Literal["status", "save", "deploy", "reload"],
+        Literal["status", "diff", "undo", "save", "deploy", "reload"],
         Field(
             description=(
                 "status: config + pending edits + whether the file changed on disk. "
-                "save: write flows.json. deploy: write, docker cp into the container, "
-                "and restart it. reload: discard pending edits and re-read from disk."
+                "diff: what the pending edits would change, per node. undo: roll back "
+                "the last mutating call. save: write flows.json. deploy: write, docker "
+                "cp into the container, and restart it. reload: discard pending edits "
+                "and re-read from disk."
             )
         ),
     ] = "status",
@@ -588,6 +768,11 @@ def nodered_session(
 ) -> dict:
     """Inspect and commit the editing session.
 
+    diff() compares the in-memory nodes against the file as it was when this
+    session loaded it, so it shows exactly what save() would write. undo()
+    rolls back one mutating tool call at a time, up to 20 of them, and is
+    cleared by save/deploy/reload.
+
     save() runs a layout gate: it lints the canvas before and after the edit
     and refuses to write if the edit introduces a NEW error-level problem
     (groups overlapping, a group box that no longer covers its own nodes).
@@ -598,6 +783,12 @@ def nodered_session(
 
     if op == "status":
         return s.status()
+
+    if op == "diff":
+        return s.diff()
+
+    if op == "undo":
+        return s.undo()
 
     if op == "reload":
         return {"ok": True, "output": s.reload()}

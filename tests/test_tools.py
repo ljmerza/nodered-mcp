@@ -12,6 +12,7 @@ find_nodes = server.nodered_find_nodes.fn
 get_node = server.nodered_get_node.fn
 edit = server.nodered_edit.fn
 group = server.nodered_group.fn
+tab = server.nodered_tab.fn
 layout_tool = server.nodered_layout.fn
 session_tool = server.nodered_session.fn
 
@@ -319,13 +320,268 @@ def test_deploy_runs_the_configured_restart_command(sess, monkeypatch):
     assert calls[-1] == ["true"]
 
 
+# ── tabs ──
+
+
+def test_create_tab_shows_up_in_the_tab_list(sess):
+    out = tab(op="create", label="Second")
+    assert out["ok"]
+    assert "Second" in query(op="tabs")
+    assert out["tab_id"] in query(op="tabs")
+
+
+def test_rename_tab(sess):
+    tab(op="rename", tab_id=TAB, label="Renamed")
+    assert "Renamed" in query(op="tabs")
+
+
+def test_set_tab_enabled_toggles_disabled(sess):
+    tab(op="set_enabled", tab_id=TAB, enabled=False)
+    assert get_node(TAB)["node"]["disabled"] is True
+    tab(op="set_enabled", tab_id=TAB, enabled=True)
+    assert get_node(TAB)["node"]["disabled"] is False
+
+
+def test_delete_tab_refuses_to_orphan_its_nodes(sess):
+    with pytest.raises(ValueError, match="delete_nodes"):
+        tab(op="delete", tab_id=TAB)
+    assert get_node(INJECT)["node"]["id"] == INJECT
+
+
+def test_delete_tab_with_its_nodes(sess):
+    out = tab(op="delete", tab_id=TAB, delete_nodes=True)
+    assert out["nodes_deleted"] == 7
+    assert query(op="tabs") == "(no tabs)"
+    assert sess.flows.get_node(INJECT) is None
+
+
+def test_delete_empty_tab_needs_no_flag(sess):
+    new_tab = tab(op="create", label="Empty")["tab_id"]
+    tab(op="delete", tab_id=new_tab)
+    assert "Empty" not in query(op="tabs")
+
+
+def test_reorder_tabs_rewrites_the_order(sess):
+    second = tab(op="create", label="Second")["tab_id"]
+    tab(op="reorder", tab_ids=[second, TAB])
+    order = [n["id"] for n in sess.flows.nodes if n.get("type") == "tab"]
+    assert order == [second, TAB]
+
+
+def test_reorder_tabs_needs_every_tab(sess):
+    tab(op="create", label="Second")
+    with pytest.raises(ValueError, match="every tab id exactly once"):
+        tab(op="reorder", tab_ids=[TAB])
+
+
+def test_tab_ops_validate_required_args(sess):
+    with pytest.raises(ValueError, match="label"):
+        tab(op="create")
+    with pytest.raises(ValueError, match="tab_id"):
+        tab(op="rename", label="x")
+
+
+# ── config nodes ──
+
+
+def test_create_config_node_has_no_canvas_presence(sess):
+    cid = edit(op="create_config_node", node_type="server", name="Home Assistant")["node_id"]
+    node = get_node(cid)["node"]
+    assert node["type"] == "server"
+    assert not any(key in node for key in ("z", "x", "y", "wires", "g"))
+
+
+def test_configs_report_counts_references(sess):
+    cid = edit(op="create_config_node", node_type="server", name="Home Assistant")["node_id"]
+    edit(
+        op="create_node",
+        tab_id=TAB,
+        node_type="api-call-service",
+        name="turn on",
+        config={"server": cid},
+        x=100,
+        y=900,
+    )
+    out = query(op="configs")
+    assert "Home Assistant" in out
+    assert "1 reference(s)" in out
+    assert "via .server" in out
+
+
+def test_config_nodes_stay_out_of_find_nodes(sess):
+    edit(op="create_config_node", node_type="server", name="Home Assistant")
+    names = [n["name"] for n in find_nodes()["nodes"]]
+    assert "Home Assistant" not in names
+
+
+# ── enable, bulk update, splice, replace ──
+
+
+def test_set_enabled_round_trips_the_d_flag(sess):
+    edit(op="set_enabled", node_id=FUNC, enabled=False)
+    assert get_node(FUNC)["node"]["d"] is True
+    edit(op="set_enabled", node_id=FUNC, enabled=True)
+    assert "d" not in get_node(FUNC)["node"]
+
+
+def test_update_many_applies_to_every_node(sess):
+    out = edit(op="update_many", node_ids=[SWITCH, ORPHAN], props={"info": "touched"})
+    assert out["count"] == 2
+    assert get_node(SWITCH)["node"]["info"] == "touched"
+    assert get_node(ORPHAN)["node"]["info"] == "touched"
+
+
+def test_update_many_is_atomic_on_a_bad_id(sess):
+    with pytest.raises(ValueError, match="not found"):
+        edit(op="update_many", node_ids=[SWITCH, "nope"], props={"info": "touched"})
+    assert "info" not in get_node(SWITCH)["node"]
+
+
+def test_insert_between_reroutes_the_wire(sess):
+    new_id = edit(op="create_node", tab_id=TAB, node_type="delay", name="wait", x=260, y=100)["node_id"]
+    out = edit(op="insert_between", source_id=INJECT, target_id=FUNC, new_node_id=new_id)
+    assert out["ports"] == [0]
+    assert get_node(INJECT)["node"]["wires"] == [[new_id]]
+    assert get_node(new_id)["node"]["wires"] == [[FUNC]]
+
+
+def test_insert_between_rejects_a_wire_that_is_not_there(sess):
+    new_id = edit(op="create_node", tab_id=TAB, node_type="delay", name="wait", x=260, y=900)["node_id"]
+    with pytest.raises(ValueError, match="No wire from"):
+        edit(op="insert_between", source_id=INJECT, target_id=DEBUG, new_node_id=new_id)
+
+
+def test_bypass_wires_upstream_straight_to_downstream(sess):
+    out = edit(op="bypass", node_id=FUNC)
+    assert out["inbound"] == 1 and out["downstream"] == 1
+    assert get_node(INJECT)["node"]["wires"] == [[DEBUG]]
+    assert get_node(FUNC)["node"]["wires"] == [[DEBUG]]
+
+
+def test_bypass_can_delete_the_node_too(sess):
+    edit(op="bypass", node_id=FUNC, delete=True)
+    assert sess.flows.get_node(FUNC) is None
+    assert get_node(INJECT)["node"]["wires"] == [[DEBUG]]
+
+
+def test_replace_node_keeps_identity_and_wiring(sess):
+    before = get_node(FUNC)["node"]
+    edit(op="replace_node", node_id=FUNC, node_type="change", config={"rules": []})
+    after = get_node(FUNC)["node"]
+    assert after["id"] == FUNC and after["type"] == "change"
+    assert after["wires"] == before["wires"]
+    assert (after["x"], after["y"]) == (before["x"], before["y"])
+    assert "func" not in after
+    assert get_node(INJECT)["node"]["wires"] == [[FUNC]]
+
+
+# ── deleting a group ──
+
+
+def test_delete_group_releases_its_members(sess):
+    out = group(op="delete", group_id=GROUP)
+    assert out["members"] == 3
+    assert sess.flows.get_node(INJECT) is not None
+    assert "g" not in get_node(INJECT)["node"]
+    assert get_node(INJECT)["context"]["group"] is None
+
+
+def test_delete_group_can_take_its_members_with_it(sess):
+    group(op="delete", group_id=GROUP, delete_nodes=True)
+    for nid in (INJECT, FUNC, DEBUG, GROUP):
+        assert sess.flows.get_node(nid) is None
+
+
+# ── diff ──
+
+
+def test_diff_is_empty_on_a_clean_session(sess):
+    out = session_tool(op="diff")
+    assert out["dirty"] is False
+    assert out["added"] == [] and out["removed"] == [] and out["changed"] == []
+
+
+def test_diff_reports_added_removed_and_changed(sess):
+    new_id = edit(op="create_node", tab_id=TAB, node_type="debug", name="extra", x=100, y=900)["node_id"]
+    edit(op="delete_node", node_id=ORPHAN)
+    edit(op="rename_node", node_id=SWITCH, name="renamed gate")
+
+    out = session_tool(op="diff")
+    assert out["dirty"] is True
+    assert [a["id"] for a in out["added"]] == [new_id]
+    assert [r["id"] for r in out["removed"]] == [ORPHAN]
+    changed = {c["id"]: c["props"] for c in out["changed"]}
+    assert changed[SWITCH]["name"] == {"from": "loose gate", "to": "renamed gate"}
+
+
+def test_diff_clears_after_a_save(sess):
+    edit(op="rename_node", node_id=SWITCH, name="renamed gate")
+    assert session_tool(op="diff")["dirty"] is True
+    session_tool(op="save")
+    assert session_tool(op="diff")["dirty"] is False
+
+
+# ── undo ──
+
+
+def test_undo_reverts_the_last_edit(sess):
+    new_id = edit(op="create_node", tab_id=TAB, node_type="debug", name="extra", x=100, y=900)["node_id"]
+    out = session_tool(op="undo")
+    assert out["ok"] is True
+    assert out["undone"] == [f"create_node debug 'extra' -> {new_id}"]
+    assert sess.flows.get_node(new_id) is None
+    assert session_tool(op="status")["pending_edits"] == []
+
+
+def test_undo_walks_back_one_call_at_a_time(sess):
+    edit(op="rename_node", node_id=SWITCH, name="first")
+    edit(op="rename_node", node_id=SWITCH, name="second")
+    session_tool(op="undo")
+    assert get_node(SWITCH)["node"]["name"] == "first"
+    session_tool(op="undo")
+    assert get_node(SWITCH)["node"]["name"] == "loose gate"
+
+
+def test_undo_restores_a_whole_group_delete(sess):
+    group(op="delete", group_id=GROUP, delete_nodes=True)
+    session_tool(op="undo")
+    assert sess.flows.get_node(INJECT) is not None
+    assert get_node(INJECT)["context"]["group"] == "Demo Chain"
+
+
+def test_undo_reports_when_there_is_nothing_to_undo(sess):
+    out = session_tool(op="undo")
+    assert out["ok"] is False
+    assert "Nothing to undo" in out["message"]
+
+
+def test_a_rejected_edit_leaves_no_undo_step(sess):
+    with pytest.raises(ValueError, match="not found"):
+        edit(op="rename_node", node_id="nope", name="x")
+    assert session_tool(op="status")["undo_steps"] == 0
+
+
+def test_save_clears_the_undo_stack(sess):
+    edit(op="rename_node", node_id=SWITCH, name="renamed gate")
+    session_tool(op="save")
+    assert session_tool(op="status")["undo_steps"] == 0
+    assert session_tool(op="undo")["ok"] is False
+
+
 # ── stdout hygiene: nothing may leak onto the MCP framing channel ──
 
 
 def test_tools_do_not_print_to_stdout(sess, capsys):
     query(op="summary")
     query(op="groups")
+    query(op="configs")
     edit(op="create_node", tab_id=TAB, node_type="debug", name="quiet", x=100, y=900)
+    edit(op="create_config_node", node_type="server", name="quiet server")
+    edit(op="bypass", node_id=FUNC)
     group(op="create", name="Quiet", tab_id=TAB, node_ids=[SWITCH])
+    group(op="delete", group_id=GROUP)
+    tab(op="create", label="Quiet tab")
     layout_tool(op="check")
+    session_tool(op="diff")
+    session_tool(op="undo")
     assert capsys.readouterr().out == ""

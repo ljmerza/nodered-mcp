@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import json
 import os
 from dataclasses import dataclass, field
 
@@ -46,6 +47,20 @@ class Journal:
         return bool(self.entries)
 
 
+# How many undo steps to keep. Each one is a full copy of the node list, so
+# this is a memory ceiling as much as a usability one.
+UNDO_DEPTH = 20
+
+
+def _snapshot(nodes: list) -> list:
+    """Deep copy of a node list. flows.json is pure JSON, so this is enough."""
+    return json.loads(json.dumps(nodes))
+
+
+def _describe(node: dict) -> dict:
+    return {"id": node.get("id"), "type": node.get("type"), "name": node.get("name", "")}
+
+
 class StaleFlowsError(RuntimeError):
     """flows.json changed on disk while edits were pending in memory."""
 
@@ -58,6 +73,9 @@ class FlowsSession:
         self.journal = Journal()
         self._flows: Flows | None = None
         self._stamp: tuple[int, int] | None = None
+        # What was on disk when we loaded, for diff(), and the undo stack.
+        self._baseline: list | None = None
+        self._undo: list[tuple[list, int]] = []
 
     # ── lifecycle ──
 
@@ -78,6 +96,8 @@ class FlowsSession:
         )
         self._stamp = self._disk_stamp()
         self.journal.clear()
+        self._baseline = _snapshot(self._flows.nodes)
+        self._undo.clear()
         nodes = len(self._flows.nodes)
         if had:
             return f"Reloaded {nodes} nodes from disk. Discarded {had} pending edit(s)."
@@ -129,7 +149,91 @@ class FlowsSession:
         committed = len(self.journal.entries)
         self.journal.clear()
         self._stamp = self._disk_stamp()
+        # What we just wrote is the new baseline; undoing across a commit
+        # would silently disagree with the file on disk.
+        self._baseline = _snapshot(self.flows.nodes)
+        self._undo.clear()
         return f"{out.text}\nCommitted {committed} edit(s)."
+
+    # ── undo ──
+
+    @contextlib.contextmanager
+    def undoable(self):
+        """Snapshot the flows around a mutating tool call.
+
+        The snapshot is kept only if the call actually changed something, so a
+        read-only op or one that failed its own validation doesn't leave a
+        dead step on the stack. A call that raised *after* mutating does get
+        a step, which is the only way back from a half-applied edit.
+        """
+        before = _snapshot(self.flows.nodes)
+        mark = len(self.journal.entries)
+        try:
+            yield
+        except Exception:
+            # Only worth a step if the failure left something half-applied;
+            # a rejected argument changed nothing to roll back.
+            if self.flows.nodes != before:
+                self._remember(before, mark)
+            raise
+        if len(self.journal.entries) > mark:
+            self._remember(before, mark)
+
+    def _remember(self, nodes: list, mark: int) -> None:
+        self._undo.append((nodes, mark))
+        del self._undo[:-UNDO_DEPTH]
+
+    def undo(self) -> dict:
+        """Roll back the last mutating tool call. In memory only."""
+        if not self._undo:
+            return {"ok": False, "message": "Nothing to undo in this session."}
+
+        nodes, mark = self._undo.pop()
+        undone = list(self.journal.entries[mark:])
+        self.flows.nodes = nodes
+        self.flows._index()
+        del self.journal.entries[mark:]
+        return {
+            "ok": True,
+            "undone": undone,
+            "pending_edits": len(self.journal.entries),
+            "undo_steps_left": len(self._undo),
+        }
+
+    # ── diff ──
+
+    def diff(self) -> dict:
+        """What the pending edits would change in flows.json.
+
+        Compares the in-memory nodes against the file as it was when this
+        session loaded it, per node id.
+        """
+        if self._flows is None:
+            return {"dirty": False, "added": [], "removed": [], "changed": []}
+
+        base = {n["id"]: n for n in (self._baseline or []) if isinstance(n, dict) and "id" in n}
+        now = {n["id"]: n for n in self._flows.nodes if isinstance(n, dict) and "id" in n}
+
+        added = [_describe(now[i]) for i in now if i not in base]
+        removed = [_describe(base[i]) for i in base if i not in now]
+
+        changed = []
+        for nid in now.keys() & base.keys():
+            props = {
+                key: {"from": base[nid].get(key), "to": now[nid].get(key)}
+                for key in sorted(set(now[nid]) | set(base[nid]))
+                if base[nid].get(key) != now[nid].get(key)
+            }
+            if props:
+                changed.append({**_describe(now[nid]), "props": props})
+
+        return {
+            "dirty": bool(added or removed or changed),
+            "added": added,
+            "removed": removed,
+            "changed": changed,
+            "pending_edits": list(self.journal.entries),
+        }
 
     def status(self) -> dict:
         loaded = self._flows is not None
@@ -139,6 +243,7 @@ class FlowsSession:
             "nodes": len(self._flows.nodes) if loaded else None,
             "dirty": self.journal.dirty,
             "pending_edits": list(self.journal.entries),
+            "undo_steps": len(self._undo),
             "file_changed_on_disk": self.externally_changed(),
         }
 
