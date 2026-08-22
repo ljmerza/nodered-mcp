@@ -1,0 +1,19 @@
+{
+  "mcpServers": {
+    "nodered": {
+      "type": "stdio",
+      "command": "uv",
+      "args": [
+        "run",
+        "--directory",
+        "/media/cubxi/docker/projects/hass/nodered-mcp",
+        "nodered-mcp"
+      ],
+      "env": {
+        "NODERED_FLOWS_PATH": "/home/cubxi/docker/volumes/nodered/data/flows.json",
+        "NODERED_CONTAINER": "nodered",
+        "NODERED_RESTART_CMD": "/media/cubxi/docker/bin/dcwrap restart {container}"
+      }
+    }
+  }
+}

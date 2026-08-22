@@ -1,0 +1,133 @@
+[
+    {
+        "id": "tab0000000000001",
+        "type": "tab",
+        "label": "Demo",
+        "disabled": false,
+        "info": ""
+    },
+    {
+        "id": "inj0000000000001",
+        "type": "inject",
+        "z": "tab0000000000001",
+        "g": "grp0000000000001",
+        "name": "tick",
+        "props": [
+            {
+                "p": "payload"
+            }
+        ],
+        "repeat": "60",
+        "topic": "",
+        "payload": "",
+        "payloadType": "date",
+        "x": 160,
+        "y": 100,
+        "wires": [
+            [
+                "fn00000000000001"
+            ]
+        ]
+    },
+    {
+        "id": "fn00000000000001",
+        "type": "function",
+        "z": "tab0000000000001",
+        "g": "grp0000000000001",
+        "name": "compute",
+        "func": "return msg;",
+        "outputs": 1,
+        "noerr": 0,
+        "x": 360,
+        "y": 100,
+        "wires": [
+            [
+                "dbg0000000000001"
+            ]
+        ]
+    },
+    {
+        "id": "dbg0000000000001",
+        "type": "debug",
+        "z": "tab0000000000001",
+        "g": "grp0000000000001",
+        "name": "out",
+        "active": true,
+        "complete": "payload",
+        "x": 560,
+        "y": 100,
+        "wires": []
+    },
+    {
+        "id": "sw00000000000001",
+        "type": "switch",
+        "z": "tab0000000000001",
+        "name": "loose gate",
+        "property": "payload",
+        "rules": [
+            {
+                "t": "true"
+            }
+        ],
+        "outputs": 1,
+        "x": 180,
+        "y": 320,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "orp0000000000001",
+        "type": "change",
+        "z": "tab0000000000001",
+        "name": "dead end",
+        "rules": [],
+        "x": 180,
+        "y": 420,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "ha00000000000001",
+        "type": "api-current-state",
+        "z": "tab0000000000001",
+        "name": "read sensor",
+        "entityid": "sensor.demo_temperature",
+        "halt_if": "",
+        "halt_if_type": "str",
+        "halt_if_compare": "is",
+        "for": "0",
+        "forType": "num",
+        "forUnits": "minutes",
+        "x": 180,
+        "y": 520,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "grp0000000000001",
+        "type": "group",
+        "z": "tab0000000000001",
+        "name": "Demo Chain",
+        "style": {
+            "stroke": "#2e333a",
+            "stroke-opacity": "1",
+            "fill": "#2e333a",
+            "fill-opacity": "0.75",
+            "label": true,
+            "label-position": "nw",
+            "color": "#a4a4a4"
+        },
+        "nodes": [
+            "inj0000000000001",
+            "fn00000000000001",
+            "dbg0000000000001"
+        ],
+        "x": 65,
+        "y": 60,
+        "w": 590,
+        "h": 80
+    }
+]
