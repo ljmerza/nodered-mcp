@@ -627,13 +627,15 @@ def main(argv=None) -> int:
     SESSION = FlowsSession(settings)
 
     # Fail fast on an unreadable/invalid flows.json rather than at first tool call.
-    with capture() as out:
+    # reload() RETURNS its summary; capture() is only here to swallow anything the
+    # engine might print, which must never reach stdout on stdio transport.
+    with capture():
         try:
-            SESSION.reload()
+            loaded = SESSION.reload()
         except (OSError, ValueError, json.JSONDecodeError) as exc:
             print(f"nodered-mcp: cannot read {settings.flows_path}: {exc}", file=sys.stderr)
             return 2
-    print(f"nodered-mcp: {out.text or 'loaded'}", file=sys.stderr)
+    print(f"nodered-mcp: {loaded}", file=sys.stderr)
 
     if args.transport == "stdio":
         mcp.run()
