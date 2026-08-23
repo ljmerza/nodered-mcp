@@ -114,7 +114,7 @@ Eight tools, each dispatching on an `op` argument.
 | `nodered_find_nodes` | Structured search by tab, type, or name substring |
 | `nodered_get_node` | One node's raw JSON plus its wiring context |
 | `nodered_edit` | `create_node`, `create_config_node`, `update_node`, `update_many`, `delete_node`, `rename_node`, `set_enabled`, `duplicate_node`, `replace_node`, `wire`, `unwire`, `insert_between`, `bypass`, `import_nodes`, `export_group` |
-| `nodered_group` | `create`, `add`, `move_node`, `delete`, `rename`, `set_style`, `normalize_styles`, `refit`, `shift`, `bounds` |
+| `nodered_group` | `create`, `add`, `move_node`, `delete`, `rename`, `set_style`, `normalize_styles`, `refit`, `shift`, `bounds`, `decouple` |
 | `nodered_tab` | `create`, `rename`, `delete`, `reorder`, `set_enabled`, `set_info` |
 | `nodered_layout` | `check`, `audit`, `free_region`, `occupied`, `arrange`, `fix` |
 | `nodered_session` | `status`, `diff`, `undo`, `save`, `deploy`, `reload` |
@@ -162,6 +162,36 @@ in the middle arranges around it rather than burying it.
 `arrange` is a dry run unless you pass `apply=true`, it reports the footprint
 it will produce before it produces it, and it goes on the undo stack like any
 other edit.
+
+### Decoupling groups
+
+A wire that runs from a node in one group to a node in another pins the two
+groups to each other: move one and the wire stretches across the tab, so the
+groups can no longer be arranged independently. `decouple` swaps every such
+wire for a `link out` / `link in` pair -- the wire now stops at the edge of its
+own group and is picked up inside the other one.
+
+```text
+nodered_group(op="decouple", tab_id=TAB)              -> the crossings, nothing changed
+nodered_group(op="decouple", tab_id=TAB, apply=true)  -> one link pair per crossing
+nodered_layout(op="arrange", tab_id=TAB, apply=true)  -> now safe to repack
+nodered_session(op="save")
+```
+
+One pair per wire, named after the node at the other end (`-> compute`,
+`tick ->`). The link out goes in a column just right of the source group's
+nodes, the link in just left of the target group's, and a group grows by one
+column however many wires cross it. Both boxes are refitted afterwards.
+
+Two kinds of wire are left alone. One touching an ungrouped node, because
+there is no second group to decouple from; and one between a group and its own
+parent or child, because those move together anyway.
+
+Scope it with `tab_id` for a whole tab or `group_id` for the crossings that
+touch one group. Like `arrange` it is a dry run unless you pass `apply=true`,
+and it goes on the undo stack. Widening the boxes can push a group into a
+neighbour, which the layout gate would block on `save` -- the op reports any
+overlap it introduces, and `arrange` repacks them.
 
 ## How it protects the file
 

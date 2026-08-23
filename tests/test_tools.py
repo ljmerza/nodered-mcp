@@ -668,6 +668,114 @@ def test_audit_filters_by_tab_name(three_groups):
     assert layout_tool(op="audit", tab="nosuchtab")["tabs"] == []
 
 
+# ── decoupling groups ──
+
+
+@pytest.fixture
+def crossed_groups(sess):
+    """Two groups with a wire running between them, plus a wire to a loose node."""
+    gate = group(op="create", name="Gate", tab_id=TAB, node_ids=[SWITCH])["group_id"]
+    edit(op="wire", source_id=FUNC, target_id=SWITCH)
+    edit(op="wire", source_id=SWITCH, target_id=HA_NODE)
+    return sess, gate
+
+
+def test_decouple_requires_a_scope(sess):
+    with pytest.raises(ValueError, match="requires tab_id or group_id"):
+        group(op="decouple")
+
+
+def test_decouple_dry_run_reports_the_crossing_and_changes_nothing(crossed_groups):
+    sess, _ = crossed_groups
+    out = group(op="decouple", tab_id=TAB)
+    assert out["applied"] is False
+    assert out["crossings"] == 1
+    assert "DRY RUN" in out["output"]
+    assert SWITCH in sess.flows.by_id[FUNC]["wires"][0]
+    assert not [n for n in sess.flows.nodes if n.get("type") == "link out"]
+
+
+def test_decouple_swaps_the_wire_for_a_reciprocal_link_pair(crossed_groups):
+    sess, gate = crossed_groups
+    pair = group(op="decouple", tab_id=TAB, apply=True)["pairs"][0]
+    lout = sess.flows.by_id[pair["link_out_id"]]
+    lin = sess.flows.by_id[pair["link_in_id"]]
+
+    assert SWITCH not in sess.flows.by_id[FUNC]["wires"][0]
+    assert lout["type"] == "link out" and lout["mode"] == "link" and lout["wires"] == []
+    assert lin["type"] == "link in" and lin["wires"] == [[SWITCH]]
+    assert lout["links"] == [lin["id"]] and lin["links"] == [lout["id"]]
+    assert lout["id"] in sess.flows.by_id[FUNC]["wires"][0]
+
+
+def test_decouple_puts_each_link_node_in_the_group_it_belongs_to(crossed_groups):
+    sess, gate = crossed_groups
+    pair = group(op="decouple", tab_id=TAB, apply=True)["pairs"][0]
+    lout, lin = sess.flows.by_id[pair["link_out_id"]], sess.flows.by_id[pair["link_in_id"]]
+    assert lout["g"] == GROUP and lout["id"] in sess.flows.by_id[GROUP]["nodes"]
+    assert lin["g"] == gate and lin["id"] in sess.flows.by_id[gate]["nodes"]
+
+
+def test_decouple_leaves_a_wire_to_an_ungrouped_node_alone(crossed_groups):
+    sess, _ = crossed_groups
+    group(op="decouple", tab_id=TAB, apply=True)
+    assert sess.flows.by_id[SWITCH]["wires"][0] == [HA_NODE]
+
+
+def test_decouple_leaves_a_wire_into_a_nested_group_alone(sess):
+    inner = group(op="create", name="Inner", tab_id=TAB, node_ids=[ORPHAN])["group_id"]
+    group(op="create", name="Outer", tab_id=TAB, node_ids=[inner, HA_NODE])
+    edit(op="wire", source_id=HA_NODE, target_id=ORPHAN)
+    assert group(op="decouple", tab_id=TAB)["crossings"] == 0
+
+
+def test_decouple_refits_the_boxes_around_the_new_links(crossed_groups):
+    sess, _ = crossed_groups
+    group(op="decouple", tab_id=TAB, apply=True)
+    escapes = [f for f in layout_tool(op="check")["findings"] if f["check"] == "group-escape"]
+    assert escapes == []
+
+
+def test_decouple_gives_a_group_one_link_column_however_many_wires_cross(crossed_groups):
+    sess, _ = crossed_groups
+    edit(op="wire", source_id=INJECT, target_id=SWITCH)
+    pairs = group(op="decouple", tab_id=TAB, apply=True)["pairs"]
+    assert len(pairs) == 2
+    outs = [sess.flows.by_id[p["link_out_id"]] for p in pairs]
+    ins = [sess.flows.by_id[p["link_in_id"]] for p in pairs]
+    assert len({n["x"] for n in outs}) == 1
+    assert len({n["y"] for n in outs}) == 2
+    assert len({n["x"] for n in ins}) == 1
+    assert len({n["y"] for n in ins}) == 2
+
+
+def test_decouple_leaves_nothing_to_decouple(crossed_groups):
+    group(op="decouple", tab_id=TAB, apply=True)
+    assert group(op="decouple", tab_id=TAB)["crossings"] == 0
+
+
+def test_decouple_scoped_to_one_group_ignores_other_tabs_worth_of_crossings(crossed_groups):
+    sess, gate = crossed_groups
+    assert group(op="decouple", group_id=gate)["crossings"] == 1
+    other = group(op="create", name="Elsewhere", tab_id=TAB, node_ids=[ORPHAN])["group_id"]
+    assert group(op="decouple", group_id=other)["crossings"] == 0
+
+
+def test_decouple_is_undoable(crossed_groups):
+    sess, _ = crossed_groups
+    before = len(sess.flows.nodes)
+    group(op="decouple", tab_id=TAB, apply=True)
+    assert session_tool(op="undo")["ok"] is True
+    assert len(sess.flows.nodes) == before
+    assert SWITCH in sess.flows.by_id[FUNC]["wires"][0]
+
+
+def test_decouple_dry_run_records_no_pending_edit(crossed_groups):
+    pending = len(session_tool(op="status")["pending_edits"])
+    group(op="decouple", tab_id=TAB)
+    assert len(session_tool(op="status")["pending_edits"]) == pending
+
+
 # ── stdout hygiene: nothing may leak onto the MCP framing channel ──
 
 
@@ -679,6 +787,7 @@ def test_tools_do_not_print_to_stdout(sess, capsys):
     edit(op="create_config_node", node_type="server", name="quiet server")
     edit(op="bypass", node_id=FUNC)
     group(op="create", name="Quiet", tab_id=TAB, node_ids=[SWITCH])
+    group(op="decouple", tab_id=TAB)
     group(op="delete", group_id=GROUP)
     tab(op="create", label="Quiet tab")
     layout_tool(op="check")

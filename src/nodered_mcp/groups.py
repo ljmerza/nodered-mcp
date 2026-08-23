@@ -5,6 +5,18 @@ import uuid
 from . import layout
 from .constants import DEFAULT_GROUP_STYLE
 
+# decouple_groups() geometry. A link node renders as a 30x30 icon whatever its
+# name, so half its width is a constant; the gap is wide enough that the link
+# column reads as a column rather than as part of the last row of nodes.
+LINK_GAP = 40
+LINK_HALF = 15
+LINK_ROW_PITCH = 40
+
+
+def _link_label(node):
+    """Short name for a node, used to label the link node standing in for it."""
+    return node.get("name") or node.get("type") or node.get("id", "?")
+
 
 class GroupMixin:
     """Create and manipulate group boxes.
@@ -205,3 +217,203 @@ class GroupMixin:
                 n["style"] = dict(style)
                 count += 1
         print(f"Normalized {count} groups to target style")
+
+    # ── decoupling groups from each other ──
+
+    def _group_chain(self, group_id):
+        """A group id plus every ancestor group above it."""
+        chain = [group_id]
+        cur = self.by_id.get(group_id, {}).get("g")
+        while cur and cur in self.by_id and cur not in chain:
+            chain.append(cur)
+            cur = self.by_id[cur].get("g")
+        return chain
+
+    def _member_extent(self, group_id):
+        """Bounding box of a group's members, without the group's own padding.
+
+        group_bounds() adds the editor's 25px, which is where the box edge
+        goes. A link column has to be placed relative to the outermost
+        *node*, so it needs the unpadded extent.
+        """
+        grp = self.by_id[group_id]
+        sf = self._subflow_names()
+        boxes = []
+        for nid in grp.get("nodes", []):
+            m = self.by_id.get(nid)
+            if m is None:
+                continue
+            box = layout.group_rect(m) if m.get("type") == "group" else layout.node_box(m, sf)
+            if box:
+                boxes.append(box)
+        if not boxes:
+            return layout.group_rect(grp)
+        return (
+            min(b[0] for b in boxes),
+            min(b[1] for b in boxes),
+            max(b[2] for b in boxes),
+            max(b[3] for b in boxes),
+        )
+
+    def find_cross_group_wires(self, tab_id=None, group_id=None):
+        """Wires that leave one group and land in another.
+
+        A crossing wire pins two groups to each other's position: move one and
+        the wire stretches across the canvas. Two kinds of wire are not
+        crossings and are left alone -- one touching an ungrouped node, which
+        has no second group to decouple from, and one between a group and its
+        own ancestor or descendant, which move together anyway.
+
+        Args:
+            tab_id: Limit to one tab.
+            group_id: Limit to crossings that touch this group, either end.
+        """
+        crossings = []
+        for src in self.nodes:
+            if not layout.is_canvas_node(src):
+                continue
+            if tab_id and src.get("z") != tab_id:
+                continue
+            src_g = src.get("g")
+            if not src_g or src_g not in self.by_id:
+                continue
+            for port, targets in enumerate(src.get("wires") or []):
+                for dst_id in targets:
+                    dst = self.by_id.get(dst_id)
+                    if dst is None:
+                        continue
+                    dst_g = dst.get("g")
+                    if not dst_g or dst_g not in self.by_id or dst_g == src_g:
+                        continue
+                    if dst_g in self._group_chain(src_g) or src_g in self._group_chain(dst_g):
+                        continue
+                    if group_id and group_id not in (src_g, dst_g):
+                        continue
+                    crossings.append(
+                        {
+                            "src_id": src["id"],
+                            "src_name": _link_label(src),
+                            "src_group_id": src_g,
+                            "src_group": self.by_id[src_g].get("name", src_g),
+                            "port": port,
+                            "dst_id": dst_id,
+                            "dst_name": _link_label(dst),
+                            "dst_group_id": dst_g,
+                            "dst_group": self.by_id[dst_g].get("name", dst_g),
+                            "tab_id": src.get("z"),
+                            "tab": self.tabs.get(src.get("z", ""), src.get("z", "")),
+                        }
+                    )
+        return crossings
+
+    def _link_slot(self, group_id, side, y, columns, gap):
+        """Reserve a spot in a group's link column. Returns (x, y).
+
+        The column's x is computed once per group and side, from the extent
+        the group had *before* any link node was added, so a group grows by
+        one column however many wires cross it. Rows are the wire's own y,
+        pushed down in LINK_ROW_PITCH steps when two links want the same one.
+        """
+        key = (group_id, side)
+        if key not in columns:
+            x1, _, x2, _ = self._member_extent(group_id)
+            x = x2 + gap + LINK_HALF if side == "out" else x1 - gap - LINK_HALF
+            columns[key] = {"x": round(x), "rows": []}
+        col = columns[key]
+        slot = round(y)
+        while any(abs(slot - r) < LINK_ROW_PITCH for r in col["rows"]):
+            slot += LINK_ROW_PITCH
+        col["rows"].append(slot)
+        return col["x"], slot
+
+    def decouple_groups(self, tab_id=None, group_id=None, gap=LINK_GAP, apply=False):
+        """Replace every cross-group wire with a link out / link in pair.
+
+        One pair per wire. The link out lands in a new column just right of
+        the source group's nodes, the link in just left of the target group's,
+        and the original wire is cut. After this no wire runs between the two
+        groups, so either can be moved without dragging a wire across the
+        canvas -- which is what makes arrange() safe to run on a busy tab.
+
+        Dry run unless apply=True. Applying widens both group boxes by their
+        new link column, which can push a group into a neighbour; the count of
+        overlaps that introduces is reported, and arrange_groups() repacks
+        them.
+
+        Args:
+            tab_id: Limit to one tab.
+            group_id: Limit to crossings that touch this group, either end.
+            gap: Clear space between a group's outermost node and its link column.
+            apply: Actually rewire. False just reports what would change.
+        Returns:
+            The list of crossings, each with link_out_id/link_in_id once applied.
+        """
+        scope = f"[{self.tabs.get(tab_id, tab_id)}]" if tab_id else "[all tabs]"
+        if group_id:
+            scope += f" group '{self.by_id.get(group_id, {}).get('name', group_id)}'"
+
+        crossings = self.find_cross_group_wires(tab_id=tab_id, group_id=group_id)
+        if not crossings:
+            print(f"No cross-group wires {scope}")
+            return crossings
+
+        print(f"{'DECOUPLING' if apply else 'DRY RUN'} {scope} {len(crossings)} cross-group wire(s)")
+        if not apply:
+            for c in crossings:
+                print(f"  '{c['src_name']}' ({c['src_group']}) -> '{c['dst_name']}' ({c['dst_group']})")
+            print("  nothing changed -- re-run with apply=true")
+            return crossings
+
+        before = layout.lint(self.nodes, checks=("group-overlap",))
+        columns = {}
+        touched = set()
+        for c in crossings:
+            src, dst = self.by_id[c["src_id"]], self.by_id[c["dst_id"]]
+            ox, oy = self._link_slot(c["src_group_id"], "out", src["y"], columns, gap)
+            ix, iy = self._link_slot(c["dst_group_id"], "in", dst["y"], columns, gap)
+            lout = self.create_node(
+                c["tab_id"],
+                "link out",
+                f"-> {c['dst_name']}",
+                config={"mode": "link", "links": [], "wires": []},
+                x=ox,
+                y=oy,
+                group_id=c["src_group_id"],
+            )
+            lin = self.create_node(
+                c["tab_id"],
+                "link in",
+                f"{c['src_name']} ->",
+                config={"links": [], "wires": [[c["dst_id"]]]},
+                x=ix,
+                y=iy,
+                group_id=c["dst_group_id"],
+            )
+            # Both ends list each other: the runtime routes on the link out's
+            # list, the editor draws the pairing from either.
+            self.by_id[lout]["links"] = [lin]
+            self.by_id[lin]["links"] = [lout]
+            # The wire that used to leave the group now stops at the link out;
+            # the link in picks it up on the far side and carries on to dst.
+            self.unwire_nodes(c["src_id"], c["dst_id"], output_index=c["port"])
+            self.wire_nodes(c["src_id"], lout, output_index=c["port"])
+            c["link_out_id"], c["link_in_id"] = lout, lin
+            touched.update((c["src_group_id"], c["dst_group_id"]))
+            print(
+                f"  '{c['src_name']}' ({c['src_group']}) -> '{c['dst_name']}' "
+                f"({c['dst_group']}) via link out ({ox},{oy}) / link in ({ix},{iy})"
+            )
+
+        refitted = sum(1 for gid in touched if self.refit_group(gid))
+        self._index()
+        print(f"  {len(crossings)} pair(s) created, {refitted} group box(es) refitted")
+
+        new = layout.new_findings(before, layout.lint(self.nodes, checks=("group-overlap",)))
+        if new:
+            for f in new:
+                print(f"  [ERROR] {f.message}")
+            print(
+                f"  {len(new)} new group overlap(s) -- the link columns widened the "
+                f"boxes. Repack with nodered_layout(op='arrange', apply=true)."
+            )
+        return crossings

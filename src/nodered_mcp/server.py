@@ -435,6 +435,7 @@ def nodered_group(
             "refit",
             "shift",
             "bounds",
+            "decouple",
         ],
         Field(
             description=(
@@ -442,7 +443,10 @@ def nodered_group(
                 "move_node: node_id + group_id (null group_id ungroups). delete: "
                 "group_id (+ delete_nodes to remove the members too, otherwise they "
                 "stay put, ungrouped). rename: group_id + name. set_style/refit/"
-                "bounds: group_id. shift: group_id + dx/dy. normalize_styles: no args."
+                "bounds: group_id. shift: group_id + dx/dy. normalize_styles: no args. "
+                "decouple: tab_id or group_id -- swap every wire that crosses a group "
+                "boundary for a link out/link in pair so the groups stop pinning each "
+                "other in place (dry run unless apply=true)."
             )
         ),
     ],
@@ -463,6 +467,7 @@ def nodered_group(
     delete_nodes: Annotated[
         bool, Field(description="delete: delete the members too, not just the box.")
     ] = False,
+    apply: Annotated[bool, Field(description="decouple: actually rewire (default false = dry run).")] = False,
 ) -> dict:
     """Create and manipulate groups. In memory until nodered_session(op='save').
 
@@ -528,6 +533,20 @@ def nodered_group(
         text, _ = run(f.shift_group, group_id, dx, dy)
         s.journal.record(f"shift_group {group_id} by ({dx:+d},{dy:+d})")
         return {"ok": True, "output": text}
+
+    if op == "decouple":
+        if not tab_id and not group_id:
+            raise ValueError("op 'decouple' requires tab_id or group_id")
+        text, pairs = run(f.decouple_groups, tab_id=tab_id, group_id=group_id, apply=apply)
+        if apply and pairs:
+            s.journal.record(f"decouple {len(pairs)} cross-group wire(s) into link in/out pairs")
+        return {
+            "ok": True,
+            "applied": bool(apply and pairs),
+            "crossings": len(pairs),
+            "pairs": pairs,
+            "output": text,
+        }
 
     if op == "bounds":
         _need(group_id, op, "group_id")
