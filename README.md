@@ -9,11 +9,11 @@ An MCP server that reads, queries, and edits a Node-RED `flows.json`.
 ## About
 
 Node-RED stores every flow, node, wire, and group box in one large JSON file.
-Editing it by hand — or with `jq` and `sed` — is how you end up with dangling
+Editing it by hand, or with `jq` and `sed`, is how you end up with dangling
 wires, groups whose boxes no longer cover their own nodes, and new nodes stacked
 on top of existing ones.
 
-This server exposes that file to an MCP client as a small set of tools that
+This server exposes that file to an MCP client as a set of tools that
 understand the format. It knows the difference between a flow node and a config
 node, it can trace a wire path, and it reproduces the Node-RED editor's own
 geometry so a group box it draws is the box the editor would have drawn.
@@ -24,21 +24,20 @@ container name, and restart command are all configuration.
 
 ## Features
 
-- **Query** — tabs, groups, orphaned nodes, subflows, config nodes and who
-  references them, referenced Home Assistant entities, and wire traces through
-  a flow.
-- **Edit** — create, update, delete, rename, and duplicate nodes; enable and
-  disable them; wire and unwire them; splice one into an existing wire or route
-  traffic around it; create, populate, restyle, and delete groups; create,
-  rename, reorder, and delete tabs; import and export node sets.
-- **Place** — claim empty canvas before creating nodes instead of guessing
-  coordinates, lint the canvas for collisions, repair overlaps, and repack a
-  tab's groups into columns instead of one tall stack.
-- **Commit deliberately** — edits accumulate in memory and reach disk only when
-  you ask, so a multi-node build lands as one unit.
-- **Look before you write** — `diff` shows exactly what the pending edits would
-  change, and `undo` walks them back one call at a time.
-- **Two guards** the underlying scripts never needed: a layout gate that refuses
+- Read tabs, groups, orphaned nodes, subflows, config nodes and who references
+  them, referenced Home Assistant entities, and wire traces through a flow.
+- Create, update, delete, rename, and duplicate nodes. Enable or disable them,
+  wire and unwire them, splice one into an existing wire, or route traffic
+  around it.
+- Create, populate, restyle, and delete groups; create, rename, reorder, and
+  delete tabs; import and export node sets.
+- Claim empty canvas before creating nodes instead of guessing coordinates,
+  lint the canvas for collisions, repair overlaps, and repack a tab's groups
+  into columns instead of one tall stack.
+- Edits accumulate in memory and reach disk only when you ask, so a multi-node
+  build lands as one unit. `diff` shows what they would change before you
+  commit, and `undo` walks them back one call at a time.
+- Two guards the underlying scripts never needed: a layout gate that refuses
   writes which introduce new collisions, and a staleness check that refuses to
   overwrite a `flows.json` someone deployed from the browser.
 
@@ -46,8 +45,8 @@ container name, and restart command are all configuration.
 
 - Python 3.11+
 - A `flows.json` on the local filesystem
-- Docker on `PATH` — only for the `deploy` tool, which copies the file into a
-  container and restarts it
+- Docker on `PATH`, used only by the `deploy` tool, which copies the file into
+  a container and restarts it
 
 ## Installation
 
@@ -151,13 +150,13 @@ nodered_session(op="save")
 
 Groups are packed into columns, each one going into whichever column is
 currently shortest. The column count is chosen to land the tab's bounding box
-nearest `target_ratio` (1.6 by default, roughly a widescreen viewport) — pass
+nearest `target_ratio` (1.6 by default, roughly a widescreen viewport). Pass
 `columns` to force it. `sort` picks the placement order: `packed` (tallest
 first, densest, but it reorders the tab), `current` (keeps the existing
 reading order), or `name`.
 
 Nodes belonging to no group never move. If the packed block would land on one,
-the whole block drops below them instead — so a tab with a scratch node parked
+the whole block drops below them instead, so a tab with a scratch node parked
 in the middle arranges around it rather than burying it.
 
 `arrange` is a dry run unless you pass `apply=true`, it reports the footprint
@@ -178,8 +177,8 @@ write if the edit introduces a **new** error-level finding:
 | `stray-in-group` | warning | A node sits inside a group box it isn't a member of |
 | `node-overlap` | warning | Two nodes occupy the same space |
 
-Problems that already existed on disk never block — only ones your edit created.
-When the gate fires, the fix is usually one of:
+Problems that already existed on disk never block. Only the ones your edit
+created do. When the gate fires, the fix is usually one of:
 
 - `nodered_layout(op="free_region")` to claim clear canvas, then place there
 - `nodered_group(op="refit", group_id=...)` to resize a group around its nodes
@@ -187,7 +186,7 @@ When the gate fires, the fix is usually one of:
 
 Group geometry is exact: the sizing rules are ported from the Node-RED editor,
 so a computed box matches what the editor draws. Node geometry is exact apart
-from label text width, which is approximated from Helvetica metrics — that is
+from label text width, which is approximated from Helvetica metrics. That is
 why node-level findings are only ever warnings.
 
 ### The staleness check
@@ -258,7 +257,7 @@ uv run ruff format --check .
 Tests run against a synthetic fixture in `tests/fixtures/`, never a real flows
 file. They cover configuration precedence, the read tools, in-memory-until-save
 semantics, the layout gate both blocking and overridden, the staleness guard,
-the deploy command sequence, and that no tool writes to stdout — a stray print
+the deploy command sequence, and that no tool writes to stdout: a stray print
 would corrupt MCP's stdio framing.
 
 CI runs the same checks through
@@ -271,9 +270,9 @@ and `pytest` green.
 
 ## Acknowledgments
 
-- [Node-RED](https://nodered.org) — the canvas geometry here is ported from its
+- [Node-RED](https://nodered.org): the canvas geometry here is ported from its
   editor client, so group boxes match what the editor draws.
-- [FastMCP](https://gofastmcp.com) — the MCP server framework.
+- [FastMCP](https://gofastmcp.com): the MCP server framework.
 
 ## License
 
