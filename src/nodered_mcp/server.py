@@ -8,7 +8,7 @@ Eight tools, each dispatching on an `op` argument:
     nodered_edit       node-level mutations (create/update/delete/wire/splice)
     nodered_group      group-level mutations (create/add/move/refit/delete)
     nodered_tab        tab lifecycle (create/rename/delete/reorder/enable)
-    nodered_layout     canvas geometry: lint, claim free space, repair
+    nodered_layout     canvas geometry: lint, claim free space, arrange, repair
     nodered_session    status / diff / undo / save / deploy / reload
 
 Edits accumulate in memory. Nothing reaches flows.json until
@@ -636,13 +636,16 @@ def nodered_tab(
 
 
 @mcp.tool
+@undoable
 def nodered_layout(
     op: Annotated[
-        Literal["check", "free_region", "occupied", "fix"],
+        Literal["check", "audit", "free_region", "occupied", "arrange", "fix"],
         Field(
             description=(
-                "check: lint the canvas. free_region: claim empty space, needs "
-                "tab_id + w + h. occupied: rects already in use on tab_id. fix: "
+                "check: lint the canvas. audit: how well organised each tab is, "
+                "worst first. free_region: claim empty space, needs tab_id + w + h. "
+                "occupied: rects already in use on tab_id. arrange: repack a tab's "
+                "groups into columns, needs tab_id (dry run unless apply=true). fix: "
                 "repair overlaps (dry run unless apply=true)."
             )
         ),
@@ -656,7 +659,29 @@ def nodered_layout(
         Literal["below", "gap"],
         Field(description="free_region: 'below' drops under everything (safe); 'gap' packs into a hole."),
     ] = "below",
-    grid: Annotated[int, Field(description="free_region: snap grid (Node-RED uses 20).")] = 20,
+    grid: Annotated[int, Field(description="free_region/arrange: snap grid (Node-RED uses 20).")] = 20,
+    columns: Annotated[
+        int,
+        Field(
+            description="arrange: how many columns. 0 picks whichever count lands closest to target_ratio."
+        ),
+    ] = 0,
+    sort: Annotated[
+        Literal["packed", "current", "name"],
+        Field(
+            description="arrange: 'packed' puts the tallest group first and fills the "
+            "shortest column (densest, but reorders the tab). 'current' keeps the "
+            "existing reading order. 'name' sorts alphabetically."
+        ),
+    ] = "packed",
+    gutter: Annotated[int, Field(description="arrange: spacing between group boxes.")] = 60,
+    target_ratio: Annotated[
+        float,
+        Field(
+            description="arrange/audit: width:height the tab should aim for (1.6 is roughly "
+            "a widescreen viewport)."
+        ),
+    ] = 1.6,
     fix_ops: Annotated[
         str,
         Field(
@@ -696,6 +721,31 @@ def nodered_layout(
             "y": oy,
             "note": "place nodes relative to this origin, e.g. x=x+200 for the next node",
         }
+
+    if op == "audit":
+        text, rows = run(f.audit_tabs, tab=tab, target_ratio=target_ratio, gutter=gutter)
+        return {"ok": True, "tabs": rows, "output": text}
+
+    if op == "arrange":
+        _need(tab_id, op, "tab_id")
+        text, plan = run(
+            f.arrange_groups,
+            tab_id,
+            columns=columns,
+            sort=sort,
+            gutter=gutter,
+            target_ratio=target_ratio,
+            grid=grid,
+            apply=apply,
+        )
+        if plan is None:
+            return {"ok": True, "applied": False, "moves": 0, "output": text}
+        if apply and plan["moves"]:
+            s.journal.record(
+                f"arrange {plan['tab']} into {plan['columns']} column(s) "
+                f"({len(plan['moves'])} group(s) moved)"
+            )
+        return {"ok": True, "applied": bool(apply and plan["moves"]), **plan, "output": text}
 
     if op == "occupied":
         _need(tab_id, op, "tab_id")

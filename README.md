@@ -32,7 +32,8 @@ container name, and restart command are all configuration.
   traffic around it; create, populate, restyle, and delete groups; create,
   rename, reorder, and delete tabs; import and export node sets.
 - **Place** — claim empty canvas before creating nodes instead of guessing
-  coordinates, lint the canvas for collisions, and repair overlaps.
+  coordinates, lint the canvas for collisions, repair overlaps, and repack a
+  tab's groups into columns instead of one tall stack.
 - **Commit deliberately** — edits accumulate in memory and reach disk only when
   you ask, so a multi-node build lands as one unit.
 - **Look before you write** — `diff` shows exactly what the pending edits would
@@ -116,7 +117,7 @@ Eight tools, each dispatching on an `op` argument.
 | `nodered_edit` | `create_node`, `create_config_node`, `update_node`, `update_many`, `delete_node`, `rename_node`, `set_enabled`, `duplicate_node`, `replace_node`, `wire`, `unwire`, `insert_between`, `bypass`, `import_nodes`, `export_group` |
 | `nodered_group` | `create`, `add`, `move_node`, `delete`, `rename`, `set_style`, `normalize_styles`, `refit`, `shift`, `bounds` |
 | `nodered_tab` | `create`, `rename`, `delete`, `reorder`, `set_enabled`, `set_info` |
-| `nodered_layout` | `check`, `free_region`, `occupied`, `fix` |
+| `nodered_layout` | `check`, `audit`, `free_region`, `occupied`, `arrange`, `fix` |
 | `nodered_session` | `status`, `diff`, `undo`, `save`, `deploy`, `reload` |
 
 ### A typical build
@@ -134,6 +135,34 @@ nodered_session(op="save")
 ```
 
 Nothing above touches `flows.json` until the final `save`.
+
+### Arranging a tab
+
+A tab that has been edited for a year drifts into one tall column, because
+every routine that needed space took the next free spot underneath everything
+else. `arrange` repacks it.
+
+```text
+nodered_layout(op="audit")                            -> worst tabs first
+nodered_layout(op="arrange", tab_id=TAB)              -> the plan, nothing moved
+nodered_layout(op="arrange", tab_id=TAB, apply=true)  -> groups repacked
+nodered_session(op="save")
+```
+
+Groups are packed into columns, each one going into whichever column is
+currently shortest. The column count is chosen to land the tab's bounding box
+nearest `target_ratio` (1.6 by default, roughly a widescreen viewport) — pass
+`columns` to force it. `sort` picks the placement order: `packed` (tallest
+first, densest, but it reorders the tab), `current` (keeps the existing
+reading order), or `name`.
+
+Nodes belonging to no group never move. If the packed block would land on one,
+the whole block drops below them instead — so a tab with a scratch node parked
+in the middle arranges around it rather than burying it.
+
+`arrange` is a dry run unless you pass `apply=true`, it reports the footprint
+it will produce before it produces it, and it goes on the undo stack like any
+other edit.
 
 ## How it protects the file
 
@@ -208,7 +237,7 @@ src/nodered_mcp/
 ├── nodes.py        NodeEditMixin  — create/update/delete/wire nodes
 ├── groups.py       GroupMixin     — create, populate, and delete group boxes
 ├── tabs.py         TabMixin       — create, rename, reorder, and delete tabs
-├── placement.py    LayoutMixin    — claim free canvas, measure and refit boxes
+├── placement.py    LayoutMixin    — claim free canvas, refit boxes, arrange tabs
 ├── transfer.py     TransferMixin  — import and export node sets
 ├── persist.py      PersistMixin   — save, deploy, and the layout gate
 └── layout.py       canvas geometry and linter, ported from the NR editor
@@ -221,7 +250,7 @@ src/nodered_mcp/
 
 ```bash
 uv sync --group dev
-uv run pytest                    # 80 tests
+uv run pytest                    # 93 tests
 uv run ruff check .
 uv run ruff format --check .
 ```

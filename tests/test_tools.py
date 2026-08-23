@@ -578,6 +578,96 @@ def test_save_clears_the_undo_stack(sess):
     assert session_tool(op="undo")["ok"] is False
 
 
+# ── arranging a tab ──
+
+
+@pytest.fixture
+def three_groups(sess):
+    """The fixture tab with three groups, and one node deliberately left loose."""
+    group(op="create", name="Gate", tab_id=TAB, node_ids=[SWITCH])
+    group(op="create", name="Dead End", tab_id=TAB, node_ids=[ORPHAN])
+    return sess
+
+
+def test_arrange_needs_at_least_two_groups(sess):
+    out = layout_tool(op="arrange", tab_id=TAB)
+    assert out["moves"] == 0
+    assert "fewer than two groups" in out["output"]
+
+
+def test_arrange_dry_run_moves_nothing(three_groups):
+    before = {g["id"]: (g["x"], g["y"]) for g in three_groups.flows.group_nodes}
+    out = layout_tool(op="arrange", tab_id=TAB)
+    assert out["applied"] is False
+    assert "DRY RUN" in out["output"]
+    assert {g["id"]: (g["x"], g["y"]) for g in three_groups.flows.group_nodes} == before
+
+
+def test_arrange_packs_the_groups_into_columns(three_groups):
+    out = layout_tool(op="arrange", tab_id=TAB, apply=True)
+    assert out["applied"] is True
+    assert out["columns"] >= 1
+    assert out["moves"]
+    for move in out["moves"]:
+        moved = three_groups.flows.by_id[move["group_id"]]
+        assert [moved["x"], moved["y"]] == move["to"]
+
+
+def test_arrange_never_moves_an_ungrouped_node(three_groups):
+    before = (three_groups.flows.by_id[HA_NODE]["x"], three_groups.flows.by_id[HA_NODE]["y"])
+    layout_tool(op="arrange", tab_id=TAB, apply=True)
+    after = (three_groups.flows.by_id[HA_NODE]["x"], three_groups.flows.by_id[HA_NODE]["y"])
+    assert after == before
+
+
+def test_arrange_introduces_no_new_layout_errors(three_groups):
+    layout_tool(op="arrange", tab_id=TAB, apply=True)
+    assert layout_tool(op="check")["errors"] == 0
+
+
+def test_arrange_honours_an_explicit_column_count(three_groups):
+    assert layout_tool(op="arrange", tab_id=TAB, columns=3)["columns"] == 3
+
+
+def test_arrange_rejects_an_unknown_sort(three_groups):
+    with pytest.raises(ValueError, match="sort must be one of"):
+        layout_tool(op="arrange", tab_id=TAB, sort="sideways")
+
+
+def test_arrange_predicts_the_footprint_it_produces(three_groups):
+    predicted = layout_tool(op="arrange", tab_id=TAB)["after"]
+    layout_tool(op="arrange", tab_id=TAB, apply=True)
+    actual = three_groups.flows.tab_footprint(TAB)
+    assert (round(actual["w"]), round(actual["h"])) == (predicted["w"], predicted["h"])
+
+
+def test_arrange_is_undoable(three_groups):
+    before = {g["id"]: (g["x"], g["y"]) for g in three_groups.flows.group_nodes}
+    layout_tool(op="arrange", tab_id=TAB, apply=True)
+    assert session_tool(op="undo")["ok"] is True
+    assert {g["id"]: (g["x"], g["y"]) for g in three_groups.flows.group_nodes} == before
+
+
+def test_arrange_dry_run_records_no_pending_edit(three_groups):
+    pending = len(session_tool(op="status")["pending_edits"])
+    layout_tool(op="arrange", tab_id=TAB)
+    assert len(session_tool(op="status")["pending_edits"]) == pending
+
+
+def test_audit_reports_every_tab_with_content(three_groups):
+    rows = layout_tool(op="audit")["tabs"]
+    assert [r["tab"] for r in rows] == ["Demo"]
+    row = rows[0]
+    assert row["groups"] == 3
+    assert row["loose_nodes"] == 1
+    assert row["overlaps"] == 0
+    assert row["recommended_columns"] >= 1
+
+
+def test_audit_filters_by_tab_name(three_groups):
+    assert layout_tool(op="audit", tab="nosuchtab")["tabs"] == []
+
+
 # ── stdout hygiene: nothing may leak onto the MCP framing channel ──
 
 
@@ -592,6 +682,8 @@ def test_tools_do_not_print_to_stdout(sess, capsys):
     group(op="delete", group_id=GROUP)
     tab(op="create", label="Quiet tab")
     layout_tool(op="check")
+    layout_tool(op="audit")
+    layout_tool(op="arrange", tab_id=TAB)
     session_tool(op="diff")
     session_tool(op="undo")
     assert capsys.readouterr().out == ""
