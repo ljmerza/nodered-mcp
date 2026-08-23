@@ -1,10 +1,18 @@
 # nodered-mcp
 
-An MCP server that reads, queries, and edits a Node-RED `flows.json`.
+<p align="center">
+<img src="https://img.shields.io/github/stars/ljmerza/nodered-mcp?style=for-the-badge&label=Stars&color=orange" alt="Stars">
+<a href="https://github.com/ljmerza/nodered-mcp/releases/latest"><img src="https://img.shields.io/github/v/release/ljmerza/nodered-mcp?style=for-the-badge&color=purple" alt="Version"></a>
+<a href="https://pypi.org/project/nodered-mcp/"><img src="https://img.shields.io/pypi/v/nodered-mcp?style=for-the-badge&label=PyPI&color=blue" alt="PyPI"></a>
+<a href="https://github.com/ljmerza/nodered-mcp/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/ljmerza/nodered-mcp/ci.yml?style=for-the-badge&label=CI" alt="CI"></a>
+<a href="https://github.com/ljmerza/nodered-mcp/blob/main/LICENSE"><img src="https://img.shields.io/github/license/ljmerza/nodered-mcp?style=for-the-badge&label=License&color=green" alt="License"></a>
+</p>
 
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![CI](https://img.shields.io/github/actions/workflow/status/ljmerza/nodered-mcp/ci.yml?branch=main)](https://github.com/ljmerza/nodered-mcp/actions)
-[![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](pyproject.toml)
+<p align="center">
+<a href="https://www.buymeacoffee.com/JMISm06AD"><img src="https://img.shields.io/badge/Buy%20Me%20A%20Coffee-FFDD00?style=for-the-badge&logo=buy-me-a-coffee&logoColor=black" alt="Buy Me A Coffee"></a>
+</p>
+
+An MCP server that reads, queries, and edits a Node-RED `flows.json`.
 
 ## About
 
