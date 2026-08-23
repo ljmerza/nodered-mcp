@@ -1,12 +1,17 @@
 name: Release
 
-# Publishes to PyPI via OIDC trusted publishing, then cuts a GitHub Release.
-# The build, publish, and release steps live in ljmerza/misc-actions; this file
-# only wires them to this package.
+# Publishes to PyPI via OIDC trusted publishing.
 #
-#   test -> release (publish-pypi -> github-release)
+#   test -> publish-pypi
 #
-# A tag whose PyPI publish failed is not "released".
+# The publish job cannot move into a reusable workflow. PyPI matches the OIDC
+# `job_workflow_ref` claim, which for a reusable workflow names that workflow's
+# own repository rather than this one, and PyPI does not support that yet:
+# https://docs.pypi.org/trusted-publishers/troubleshooting/#reusable-workflows-on-github
+# The build steps are still shared through the python-build composite action,
+# because an action runs inside this job and leaves the claim pointing here.
+#
+# The GitHub Release is cut separately, not by this workflow.
 
 on:
   push:
@@ -26,14 +31,24 @@ jobs:
       coverage-source: nodered_mcp
     secrets: inherit
 
-  release:
-    name: Publish
+  publish-pypi:
+    name: Build and publish to PyPI
     needs: test
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/nodered-mcp
     permissions:
-      contents: write
       id-token: write
-    uses: ljmerza/misc-actions/.github/workflows/python-release.yml@v2.2.0
-    with:
-      package-name: nodered-mcp
-      python-version: "3.12"
-    secrets: inherit
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: ljmerza/misc-actions/actions/python-build@v2.2.0
+        with:
+          python-version: "3.12"
+          # Only a tag can be checked against pyproject; a dispatch from a
+          # branch has nothing meaningful to compare.
+          expected-version: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+
+      - name: Publish to PyPI via OIDC
+        uses: pypa/gh-action-pypi-publish@release/v1
