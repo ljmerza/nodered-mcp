@@ -36,7 +36,7 @@ CLI:
     python3 -m nodered_mcp.flows trace <id>       # Follow the wire path
     python3 -m nodered_mcp.flows entities         # All HA entities referenced
     python3 -m nodered_mcp.flows export <group>   # Export a group as JSON
-    python3 -m nodered_mcp.flows deploy           # docker cp + restart
+    python3 -m nodered_mcp.flows deploy           # push to the running Node-RED
 
     Every command accepts --flows-path PATH.
 
@@ -48,7 +48,7 @@ Python:
     f.create_node(tab_id, "inject", "tick", x=ox, y=oy)
     f.save()                       # REFUSES if the edit adds an overlap
     f.save(allow_overlap=True)     # override the layout gate
-    f.deploy()                     # docker cp into the container + restart
+    f.deploy()                     # push to the running Node-RED (see persist.py)
 
 Layout gate:
     save() lints the canvas before and after the edit and blocks on any NEW
@@ -62,12 +62,15 @@ import json
 import sys
 
 from .constants import (
-    CONFIG_TYPES,
+    ADMIN_TOKEN,
+    ADMIN_URL,
     CONTAINER_FLOWS_PATH,
     CONTAINER_NAME,
     DEFAULT_GROUP_STYLE,
     FLOWS_PATH,
+    DeployError,
     LayoutError,
+    default_group_style,
     default_restart_cmd,
 )
 from .groups import GroupMixin
@@ -80,7 +83,14 @@ from .transfer import TransferMixin
 
 # Re-exported so `from nodered_mcp.flows import DEFAULT_GROUP_STYLE, LayoutError`
 # keeps working for anything ported from the original single-file module.
-__all__ = ["DEFAULT_GROUP_STYLE", "CONFIG_TYPES", "FLOWS_PATH", "Flows", "LayoutError", "main"]
+__all__ = [
+    "DEFAULT_GROUP_STYLE",
+    "FLOWS_PATH",
+    "DeployError",
+    "Flows",
+    "LayoutError",
+    "main",
+]
 
 
 class Flows(ReadMixin, NodeEditMixin, GroupMixin, TabMixin, LayoutMixin, TransferMixin, PersistMixin):
@@ -90,22 +100,58 @@ class Flows(ReadMixin, NodeEditMixin, GroupMixin, TabMixin, LayoutMixin, Transfe
     there is no MRO subtlety to reason about.
     """
 
-    def __init__(self, path=None, container=None, container_flows_path=None, restart_cmd=None):
-        self.path = path or FLOWS_PATH
-        if not self.path:
-            raise ValueError(
-                "No flows.json path given. Pass path=..., set NODERED_FLOWS_PATH, "
-                "or start the server with --flows-path."
-            )
+    def __init__(
+        self,
+        path=None,
+        container=None,
+        container_flows_path=None,
+        restart_cmd=None,
+        admin_url=None,
+        admin_token=None,
+        group_style=None,
+    ):
+        self.path = path or FLOWS_PATH or ""
         self.container = container or CONTAINER_NAME
         self.container_flows_path = container_flows_path or CONTAINER_FLOWS_PATH
         self.restart_cmd = list(restart_cmd) if restart_cmd else default_restart_cmd(self.container)
+        # Set admin_url and deploy() goes over the Admin API instead of docker.
+        self.admin_url = (admin_url if admin_url is not None else ADMIN_URL).rstrip("/")
+        self.admin_token = admin_token if admin_token is not None else ADMIN_TOKEN
+        self.group_style = default_group_style(group_style)
+        if not self.path and not self.admin_url:
+            raise ValueError(
+                "Nowhere to read flows from. Pass path=... or admin_url=..., set "
+                "NODERED_FLOWS_PATH or NODERED_URL, or start the server with "
+                "--flows-path / --nodered-url."
+            )
+        # Node-RED's revision of the flows we loaded. None when they came from
+        # a file, which has its own staleness guard; a string when they came
+        # from the Admin API, and it is echoed back on deploy.
+        self.rev = None
+        self._loaded = []
         self._load()
 
     def _load(self):
-        with open(self.path) as f:
-            self.nodes = json.load(f)
+        """Read the flows from whichever source this instance was given."""
+        if self.path:
+            with open(self.path) as f:
+                self.nodes = json.load(f)
+        else:
+            self.nodes, self.rev = self.fetch_flows()
+        self._loaded = json.loads(json.dumps(self.nodes))
         self._index()
+
+    def _layout_baseline(self):
+        """The flows as they stand at the source, for the layout gate to diff.
+
+        Re-read from the file when there is one, so an edit someone made
+        outside this session is part of the "before" picture. For an
+        API-sourced session the snapshot taken at load is the best available.
+        """
+        if not self.path:
+            return self._loaded
+        with open(self.path) as fh:
+            return json.load(fh)
 
     def _index(self):
         """Build lookup indexes."""
@@ -134,16 +180,15 @@ class Flows(ReadMixin, NodeEditMixin, GroupMixin, TabMixin, LayoutMixin, Transfe
     def _is_config_node(self, n):
         """True if the node is a config node: real, but never on a canvas.
 
-        Structural rather than a type allowlist, so an mqtt-broker and a
-        tls-config both qualify even though only one of them is named in
-        CONFIG_TYPES: a config node belongs to no tab and has no coordinates.
+        Purely structural -- a config node belongs to no tab and has no
+        coordinates. There is no type allowlist to keep up to date, so an
+        mqtt-broker, a tls-config, an influxdb and whatever a contrib palette
+        invents next are all recognised without this package knowing them.
         """
         if not isinstance(n, dict):
             return False
         if n.get("type") in ("tab", "group", "subflow"):
             return False
-        if n.get("type") in CONFIG_TYPES:
-            return True
         return not n.get("z") and "x" not in n and "y" not in n
 
     def _references_to(self, node_id):

@@ -3,7 +3,6 @@
 import uuid
 
 from . import layout
-from .constants import DEFAULT_GROUP_STYLE
 
 # decouple_groups() geometry. A link node renders as a 30x30 icon whatever its
 # name, so half its width is a constant; the gap is wide enough that the link
@@ -32,12 +31,12 @@ class GroupMixin:
             name: Group label.
             tab_id: Tab to create it on.
             node_ids: Members. The box is fitted to them exactly.
-            style: Group style; defaults to DEFAULT_GROUP_STYLE (dark).
+            style: Group style; defaults to the configured group style.
             reflow: If the fitted box lands on top of another group, move the
                 whole group (and its nodes) to free canvas. Pass False to keep
                 the coordinates as-is.
         """
-        style = style or dict(DEFAULT_GROUP_STYLE)
+        style = style or dict(self.group_style)
         gid = uuid.uuid4().hex[:16]
 
         child_nodes = [self.by_id[nid] for nid in node_ids if nid in self.by_id]
@@ -200,8 +199,8 @@ class GroupMixin:
         raise ValueError(f"Group {group_id} not found")
 
     def set_group_style(self, group_id, style=None):
-        """Set a group's style (defaults to the standard dark style)."""
-        style = style or dict(DEFAULT_GROUP_STYLE)
+        """Set a group's style (defaults to the configured group style)."""
+        style = style or dict(self.group_style)
         for n in self.nodes:
             if n["type"] == "group" and n["id"] == group_id:
                 n["style"] = style
@@ -210,7 +209,7 @@ class GroupMixin:
 
     def normalize_group_styles(self, style=None):
         """Set all groups to the same style."""
-        style = style or dict(DEFAULT_GROUP_STYLE)
+        style = style or dict(self.group_style)
         count = 0
         for n in self.nodes:
             if n["type"] == "group":

@@ -12,23 +12,19 @@
 <a href="https://www.buymeacoffee.com/JMISm06AD"><img src="https://img.shields.io/badge/Buy%20Me%20A%20Coffee-FFDD00?style=for-the-badge&logo=buy-me-a-coffee&logoColor=black" alt="Buy Me A Coffee"></a>
 </p>
 
-An MCP server that reads, queries, and edits a Node-RED `flows.json`.
+Explore, edit, and deploy Node-RED flows from an MCP client.
 
 ## About
 
-Node-RED stores every flow, node, wire, and group box in one large JSON file.
-Editing it by hand, or with `jq` and `sed`, is how you end up with dangling
-wires, groups whose boxes no longer cover their own nodes, and new nodes stacked
-on top of existing ones.
+An MCP server for Node-RED. It gives an MCP client tools to explore and edit a
+flow set -- tabs, nodes, wires, groups, subflows and config nodes -- and to
+deploy the result to the running instance.
 
-This server exposes that file to an MCP client as a set of tools that
-understand the format. It knows the difference between a flow node and a config
-node, it can trace a wire path, and it reproduces the Node-RED editor's own
-geometry so a group box it draws is the box the editor would have drawn.
-
-It is a port of the `flows_util.py` / `layout_util.py` pair used to script
-Node-RED changes in a home-automation repo, generalised so the file path,
-container name, and restart command are all configuration.
+It reaches Node-RED over its Admin API, or works directly against a
+`flows.json` on disk. Either way the tools understand the format rather than
+treating it as generic JSON: they tell a flow node from a config node, follow a
+wire path across tabs, and reproduce the editor's own geometry, so a group box
+this server draws is the box Node-RED would have drawn.
 
 ## Features
 
@@ -42,21 +38,30 @@ container name, and restart command are all configuration.
 - Claim empty canvas before creating nodes instead of guessing coordinates,
   lint the canvas for collisions, repair overlaps, and repack a tab's groups
   into columns instead of one tall stack.
-- Edits accumulate in memory and reach disk only when you ask, so a multi-node
-  build lands as one unit. `diff` shows what they would change before you
-  commit, and `undo` walks them back one call at a time.
-- Two guards the underlying scripts never needed: a layout gate that refuses
-  writes which introduce new collisions, and a staleness check that refuses to
-  overwrite a `flows.json` someone deployed from the browser.
+- Edits accumulate in memory and reach Node-RED only when you commit, so a
+  multi-node build lands as one unit. `diff` shows what they would change
+  before you commit, and `undo` walks them back one call at a time.
+- Two guards on every write: a layout gate that refuses writes introducing new
+  collisions, and a staleness check that refuses to overwrite flows someone
+  deployed from the browser in the meantime.
 
 ## Requirements
 
-- Python 3.11+
-- A `flows.json` on the local filesystem
-- Docker on `PATH`, used only by the `deploy` tool, which copies the file into
-  a container and restarts it
+- Python 3.11+ and nothing outside the standard library beyond `fastmcp`
+- One of: a reachable Node-RED, or a `flows.json` on this filesystem
+
+That is the whole list. Docker is needed only by the fallback deploy route,
+which you can ignore entirely if Node-RED's Admin API is reachable.
 
 ## Installation
+
+No install step -- `uvx` fetches and runs it:
+
+```bash
+uvx nodered-mcp --nodered-url http://localhost:1880
+```
+
+Or `pip install nodered-mcp`. To work on the package itself:
 
 ```bash
 git clone https://github.com/ljmerza/nodered-mcp
@@ -66,12 +71,24 @@ uv sync
 
 ## Usage
 
-The `flows.json` path is the only required setting. There is no sensible
-default, so the server refuses to start without one.
+The server needs to know where the flows are. Point it at a running Node-RED
+and it reads them over the Admin API -- no file access, and Node-RED can be on
+another machine:
 
 ```bash
-uv run nodered-mcp --flows-path /path/to/nodered/data/flows.json
+nodered-mcp --nodered-url http://localhost:1880
 ```
+
+Or point it at the file:
+
+```bash
+nodered-mcp --flows-path /path/to/nodered/data/flows.json
+```
+
+With neither, it looks in `~/.node-red/` and uses the flow file it finds there.
+That covers a stock `npm install -g node-red`, where the file is named after
+the hostname (`flows_raspberrypi.json`) rather than `flows.json` -- only the
+Docker image uses the plain name.
 
 ### Register with an MCP client
 
@@ -80,10 +97,10 @@ uv run nodered-mcp --flows-path /path/to/nodered/data/flows.json
   "mcpServers": {
     "nodered": {
       "type": "stdio",
-      "command": "uv",
-      "args": ["run", "--directory", "/path/to/nodered-mcp", "nodered-mcp"],
+      "command": "uvx",
+      "args": ["nodered-mcp"],
       "env": {
-        "NODERED_FLOWS_PATH": "/path/to/nodered/data/flows.json"
+        "NODERED_URL": "http://localhost:1880"
       }
     }
   }
@@ -98,19 +115,95 @@ Every setting resolves **CLI flag > environment variable > default**.
 
 | Flag | Environment variable | Default | Purpose |
 |---|---|---|---|
-| `--flows-path` | `NODERED_FLOWS_PATH` | *(required)* | Path to `flows.json` on the host |
-| `--container` | `NODERED_CONTAINER` | `nodered` | Container name used by `deploy` |
-| `--container-flows-path` | `NODERED_CONTAINER_FLOWS_PATH` | `/data/flows.json` | Path to `flows.json` inside the container |
-| `--restart-cmd` | `NODERED_RESTART_CMD` | `docker restart <container>` | Restart command; `{container}` is substituted |
+| `--nodered-url` | `NODERED_URL` | *(unset)* | Base URL of the running Node-RED. Reads the flows and deploys over its Admin API |
+| `--flows-path` | `NODERED_FLOWS_PATH` | *(discovered)* | Path to `flows.json`. Optional when `--nodered-url` is set |
+| `--nodered-token` | `NODERED_TOKEN` | *(unset)* | Admin API token, if `adminAuth` is enabled |
+| `--read-only` | `NODERED_READ_ONLY` | `false` | Expose only the read tools. Nothing can edit, save, or deploy |
+| `--group-style` | `NODERED_GROUP_STYLE` | *(editor theme)* | JSON merged over Node-RED's default style for groups this server creates |
 | `--transport` | `NODERED_MCP_TRANSPORT` | `stdio` | `stdio`, `http`, or `sse` |
 | `--host` / `--port` | `NODERED_MCP_HOST` / `NODERED_MCP_PORT` | `127.0.0.1` / `8080` | Bind address for `http` and `sse` |
 
-If Node-RED is managed by something other than plain Docker, point
-`--restart-cmd` at it:
+Only used by the fallback deploy route, below:
+
+| Flag | Environment variable | Default | Purpose |
+|---|---|---|---|
+| `--container` | `NODERED_CONTAINER` | `nodered` | Container name used by `deploy` |
+| `--container-flows-path` | `NODERED_CONTAINER_FLOWS_PATH` | `/data/flows.json` | Path to `flows.json` inside the container |
+| `--restart-cmd` | `NODERED_RESTART_CMD` | `docker restart <container>` | Restart command; `{container}` is substituted |
+
+### Where the flows come from
+
+Set `--nodered-url` and the flows are read with `GET /flows` and written back
+with `POST /flows`. This host needs no filesystem access to Node-RED at all,
+so it works against a container, a systemd service, a Home Assistant add-on,
+or a box across the network, all the same way.
+
+Node-RED stamps each flow revision, and that revision is what guards your
+edits: this server sends back the `rev` it loaded, and if anyone deployed in
+the meantime Node-RED answers `409` and the edit is refused rather than
+silently reverting their work. `session(op='deploy', force=true)` overrides it.
+
+Set `--flows-path` instead and the flows are read from the file. The
+equivalent guard compares the file against what was loaded, so a Deploy from
+the browser is caught the same way.
+
+### Group styling
+
+Groups this server creates carry no colours, which is what Node-RED itself
+does -- the editor computes stroke and fill from the active theme's CSS, so a
+group looks right whether the person opening it uses the light or dark theme.
+To force a specific look, merge in the keys you care about:
+
+```bash
+NODERED_GROUP_STYLE='{"fill": "#2e333a", "fill-opacity": "0.75"}'
+```
+
+### Read-only mode
+
+`--read-only` unregisters `nodered_edit`, `nodered_group` and `nodered_tab`
+entirely, so a client never sees them, and refuses the mutating ops of the
+other two tools. Useful for pointing a model at a production Node-RED to ask
+questions about it.
+
+### How `deploy` reaches Node-RED
+
+`save` only writes `flows.json`. Node-RED reads that file at startup and not
+again, so a save on its own changes nothing in the running instance -- and
+with no local file there is nothing for it to do, so it refuses. `deploy` is
+what makes the flows live, and it has two routes.
+
+**Admin API (set `--nodered-url`).** The flows are POSTed to Node-RED's own
+[Admin API](https://nodered.org/docs/api/admin/), the same endpoint the editor
+uses when you press Deploy. Node-RED swaps them in place, so there is no
+restart and no downtime, and this host needs no container runtime. If a local
+`flows.json` is also configured it is written first, so the file stays in step.
+
+Node credentials are untouched: they live in `flows_cred.json`, keyed by node
+id, and a deploy that carries no `credentials` key leaves them exactly as they
+were (verified against Node-RED 5.0.4).
+
+If `settings.js` sets `httpAdminRoot`, include it (`http://localhost:1880/admin`).
+If it sets `adminAuth`, add a token. Node-RED mints one from your editor
+credentials, and it expires -- 7 days by default:
+
+```bash
+curl -s http://localhost:1880/auth/token \
+  --data 'client_id=node-red-admin&grant_type=password&scope=*&username=admin&password=secret'
+# {"access_token":"...","expires_in":604800,"token_type":"Bearer"}
+
+NODERED_TOKEN="..."
+```
+
+**Docker (no `--nodered-url`).** The fallback: `docker cp` the flows into the
+container, then run `--restart-cmd`. This restarts the whole container and
+needs the Docker CLI plus socket access. Point `--restart-cmd` at whatever
+actually manages the container:
 
 ```bash
 NODERED_RESTART_CMD="docker compose restart {container}"
 ```
+
+`session(op='status')` reports which route is configured.
 
 ## Tools
 
@@ -201,7 +294,7 @@ and it goes on the undo stack. Widening the boxes can push a group into a
 neighbour, which the layout gate would block on `save` -- the op reports any
 overlap it introduces, and `arrange` repacks them.
 
-## How it protects the file
+## How it protects your flows
 
 ### The layout gate
 
@@ -215,7 +308,7 @@ write if the edit introduces a **new** error-level finding:
 | `stray-in-group` | warning | A node sits inside a group box it isn't a member of |
 | `node-overlap` | warning | Two nodes occupy the same space |
 
-Problems that already existed on disk never block. Only the ones your edit
+Problems that already existed never block. Only the ones your edit
 created do. When the gate fires, the fix is usually one of:
 
 - `nodered_layout(op="free_region")` to claim clear canvas, then place there
@@ -229,15 +322,24 @@ why node-level findings are only ever warnings.
 
 ### The staleness check
 
-Node-RED rewrites `flows.json` whenever someone presses Deploy in the browser.
-The session records `(mtime_ns, size)` when it loads the file and re-checks
-before every write. If the file changed underneath you, the commit is refused
-rather than silently reverting that work. Either `reload` and redo your edits,
-or pass `force=true`.
+Someone pressing Deploy in the browser while you have edits pending would be
+silently reverted by your commit. Both sources guard against that, each using
+whatever the source itself can prove.
 
-Nanoseconds rather than `os.path.getmtime`: a float epoch only resolves to about
-a microsecond, so a write landing in the same tick as the load compares equal
-and slips past the check.
+**Admin API.** Node-RED stamps every flow revision. The session sends back the
+`rev` it loaded, and Node-RED answers `409` if that is no longer current. Its
+own conflict check, so nothing can slip between the check and the write.
+
+**File.** The session records `(mtime_ns, size)` at load and re-checks before
+every write. Nanoseconds rather than `os.path.getmtime`: a float epoch only
+resolves to about a microsecond, so a write landing in the same tick as the
+load would compare equal and slip past. A stamp mismatch is then confirmed
+against the file's actual content, because a rewrite that reproduces what you
+already have is not somebody else's work -- Node-RED persists the flows a
+deploy just handed it, to the same file, with a fresh mtime.
+
+Either way the commit is refused rather than reverting the other work. Either
+`reload` and redo your edits, or pass `force=true`.
 
 ## Standalone use
 

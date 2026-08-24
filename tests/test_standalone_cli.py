@@ -12,7 +12,7 @@ def test_flows_cli_summary(flows_file, capsys):
 def test_flows_cli_without_a_path_fails_cleanly(monkeypatch, capsys):
     monkeypatch.setattr("nodered_mcp.flows.FLOWS_PATH", None)
     assert flows_main(["summary"]) == 2
-    assert "No flows.json path" in capsys.readouterr().out
+    assert "Nowhere to read flows from" in capsys.readouterr().out
 
 
 def test_layout_cli_lints_clean(flows_file, capsys):
