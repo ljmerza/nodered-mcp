@@ -106,18 +106,6 @@ ZERO_SIZE_TYPES = {"junction"}
 # Not canvas nodes at all.
 NON_CANVAS_TYPES = {"tab", "subflow", "group", "comment"}
 
-CONFIG_TYPES = {
-    "server",
-    "mqtt-broker",
-    "websocket-listener",
-    "websocket-client",
-    "pushbullet-config",
-    "GSheetConnection",
-    "ha-device-config",
-    "ha-entity-config",
-    "gauth",
-}
-
 # Helvetica AFM advance widths, units per 1000em.
 # fmt: off
 # A 100-entry glyph-width table. One entry per line would be 100 lines of
@@ -185,11 +173,14 @@ def node_label(node, subflows=None):
 
 
 def is_canvas_node(node):
-    """True if the node occupies space on a tab's canvas."""
+    """True if the node occupies space on a tab's canvas.
+
+    Structural, not a type allowlist: config nodes are exactly the ones with
+    no coordinates, whatever palette they came from.
+    """
     if not isinstance(node, dict):
         return False
-    t = node.get("type", "")
-    if t in NON_CANVAS_TYPES or t in CONFIG_TYPES:
+    if node.get("type", "") in NON_CANVAS_TYPES:
         return False
     return "x" in node and "y" in node
 

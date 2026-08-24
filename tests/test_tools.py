@@ -1,10 +1,13 @@
+import io
 import json
+import subprocess
+import urllib.error
 
 import pytest
 
 from conftest import DEBUG, FUNC, GROUP, HA_NODE, INJECT, ORPHAN, SWITCH, TAB
 from nodered_mcp import server
-from nodered_mcp.session import StaleFlowsError
+from nodered_mcp.session import FlowsSession, StaleFlowsError
 
 # The decorators wrap each function in a FunctionTool; .fn is the original.
 query = server.nodered_query.fn
@@ -157,12 +160,36 @@ def test_import_nodes_remaps_ids(sess, tmp_path):
 # ── groups ──
 
 
-def test_create_group_uses_the_house_dark_style(sess):
-    res = group(op="create", name="Loose", tab_id=TAB, node_ids=[SWITCH, ORPHAN, HA_NODE])
-    gid = res["group_id"]
+def test_a_new_group_follows_the_editor_theme_by_default(sess):
+    """Node-RED computes group colours from the active theme's CSS, so a group
+    stored without them looks right in whatever theme the viewer is using."""
+    gid = group(op="create", name="Loose", tab_id=TAB, node_ids=[SWITCH, ORPHAN, HA_NODE])["group_id"]
     style = sess.flows.get_node(gid)["style"]
+    assert style == {"label": True, "label-position": "nw"}
+    assert "fill" not in style and "stroke" not in style
+
+
+def test_group_style_can_be_overridden(settings, monkeypatch):
+    settings.group_style = {"fill": "#2e333a", "fill-opacity": "0.75"}
+    s = FlowsSession(settings)
+    monkeypatch.setattr(server, "SESSION", s)
+
+    gid = group(op="create", name="Loose", tab_id=TAB, node_ids=[SWITCH, ORPHAN])["group_id"]
+    style = s.flows.get_node(gid)["style"]
     assert style["fill"] == "#2e333a"
     assert style["fill-opacity"] == "0.75"
+    # Merged over the default, not a replacement for it.
+    assert style["label"] is True
+    assert style["label-position"] == "nw"
+
+
+def test_a_foreign_config_node_type_is_recognised(sess):
+    """No type allowlist: a config node is one with no tab and no coordinates,
+    whatever palette invented it."""
+    sess.flows.nodes.append({"id": "influx0000000001", "type": "influxdb", "name": "metrics"})
+    sess.flows._index()
+    assert "influxdb" in query(op="configs")
+    assert "influxdb" not in query(op="orphans")
 
 
 def test_created_group_box_covers_its_members(sess):
@@ -290,11 +317,22 @@ def test_force_overwrites_a_changed_file(sess, flows_file, on_disk):
     assert any(n.get("name") == "mine" for n in on_disk())
 
 
-def test_session_assert_writable_raises_directly(sess, flows_file):
+def test_session_assert_writable_raises_directly(sess, flows_file, on_disk):
     sess.flows  # load
-    flows_file.write_text(flows_file.read_text() + "\n")
+    nodes = on_disk()
+    nodes.append({"id": "theirs000000001", "type": "comment", "z": TAB, "name": "theirs"})
+    flows_file.write_text(json.dumps(nodes, indent=4))
     with pytest.raises(StaleFlowsError):
         sess.assert_writable()
+
+
+def test_a_rewrite_with_the_same_content_is_not_stale(sess, flows_file, on_disk):
+    """Node-RED persists the flows an Admin API deploy just handed it, back to
+    the same file with a fresh mtime. Same content, so not somebody's work."""
+    sess.flows  # load
+    flows_file.write_text(json.dumps(on_disk()))  # reformatted, byte-different
+    assert sess.externally_changed() is False
+    sess.assert_writable()
 
 
 # ── deploy ──
@@ -318,6 +356,110 @@ def test_deploy_runs_the_configured_restart_command(sess, monkeypatch):
     assert calls[0][:2] == ["docker", "cp"]
     assert calls[0][3].startswith("test-nodered:/data/flows.json")
     assert calls[-1] == ["true"]
+
+
+def test_deploy_reports_a_missing_docker_instead_of_traceback(sess, monkeypatch):
+    def no_docker(cmd, **kwargs):
+        raise FileNotFoundError(2, "No such file or directory", cmd[0])
+
+    monkeypatch.setattr("nodered_mcp.persist.subprocess.run", no_docker)
+    edit(op="rename_node", node_id=FUNC, name="deployed")
+
+    res = session_tool(op="deploy")
+    assert res["ok"] is False and res["error"] == "deploy_failed"
+    assert "not on PATH" in res["message"] and "--nodered-url" in res["message"]
+
+
+def test_deploy_reports_a_failing_restart_command(sess, monkeypatch):
+    def fails(cmd, **kwargs):
+        if cmd[0] == "docker" and cmd[1] == "cp":
+            return None
+        raise subprocess.CalledProcessError(1, cmd)
+
+    monkeypatch.setattr("nodered_mcp.persist.subprocess.run", fails)
+    edit(op="rename_node", node_id=FUNC, name="deployed")
+
+    res = session_tool(op="deploy")
+    assert res["ok"] is False and res["error"] == "deploy_failed"
+    assert "exit code 1" in res["message"]
+
+
+# ── deploy over the Admin API ──
+
+
+def test_admin_deploy_posts_the_flows_to_the_admin_api(admin_sess, fake_urlopen):
+    edit(op="rename_node", node_id=FUNC, name="deployed")
+    assert session_tool(op="deploy")["ok"] is True
+
+    (req,) = fake_urlopen
+    assert req.full_url == "http://nodered.test:1880/flows"
+    assert req.get_method() == "POST"
+    assert req.headers["Node-red-deployment-type"] == "full"
+    assert req.headers["Content-type"] == "application/json"
+    posted = json.loads(req.data)
+    assert any(n.get("name") == "deployed" for n in posted)
+
+
+def test_admin_deploy_needs_no_docker(admin_sess, fake_urlopen, monkeypatch):
+    def no_subprocess(*a, **kw):
+        raise AssertionError("the Admin API route must not shell out")
+
+    monkeypatch.setattr("nodered_mcp.persist.subprocess.run", no_subprocess)
+    edit(op="rename_node", node_id=FUNC, name="deployed")
+    assert session_tool(op="deploy")["ok"] is True
+
+
+def test_admin_deploy_also_writes_flows_json(admin_sess, fake_urlopen, on_disk):
+    edit(op="rename_node", node_id=FUNC, name="deployed")
+    session_tool(op="deploy")
+    assert any(n.get("name") == "deployed" for n in on_disk())
+
+
+def test_admin_deploy_sends_no_auth_header_without_a_token(admin_sess, fake_urlopen):
+    session_tool(op="deploy")
+    assert "Authorization" not in fake_urlopen[0].headers
+
+
+def test_admin_deploy_sends_a_bearer_token_when_configured(admin_settings, fake_urlopen, monkeypatch):
+    admin_settings.admin_token = "s3cret"
+    monkeypatch.setattr(server, "SESSION", FlowsSession(admin_settings))
+    session_tool(op="deploy")
+    assert fake_urlopen[0].headers["Authorization"] == "Bearer s3cret"
+
+
+def test_admin_deploy_runs_the_layout_gate(admin_sess, fake_urlopen):
+    """A deploy that would introduce an overlap never reaches the network."""
+    _overlapping_group(admin_sess)
+    res = session_tool(op="deploy")
+    assert res["ok"] is False and res["error"] == "layout_gate"
+    assert fake_urlopen == []
+
+
+def test_admin_deploy_401_points_at_the_token_flag(admin_sess, fake_urlopen):
+    fake_urlopen.fail = urllib.error.HTTPError(
+        "http://nodered.test:1880/flows", 401, "Unauthorized", {}, io.BytesIO(b"")
+    )
+    res = session_tool(op="deploy")
+    assert res["ok"] is False and res["error"] == "deploy_failed"
+    assert "--nodered-token" in res["message"]
+
+
+def test_admin_deploy_404_points_at_the_url_flag(admin_sess, fake_urlopen):
+    fake_urlopen.fail = urllib.error.HTTPError(
+        "http://nodered.test:1880/flows", 404, "Not Found", {}, io.BytesIO(b"")
+    )
+    res = session_tool(op="deploy")
+    assert "httpAdminRoot" in res["message"]
+
+
+def test_admin_deploy_unreachable_keeps_the_edits_pending(admin_sess, fake_urlopen):
+    fake_urlopen.fail = urllib.error.URLError("Connection refused")
+    edit(op="rename_node", node_id=FUNC, name="deployed")
+
+    res = session_tool(op="deploy")
+    assert res["ok"] is False and res["error"] == "deploy_failed"
+    assert "could not reach" in res["message"]
+    assert get_node(FUNC)["node"]["name"] == "deployed"
 
 
 # ── tabs ──
@@ -796,3 +938,119 @@ def test_tools_do_not_print_to_stdout(sess, capsys):
     session_tool(op="diff")
     session_tool(op="undo")
     assert capsys.readouterr().out == ""
+
+
+# ── flows sourced from the Admin API, with no local file ──
+
+
+def test_an_api_only_session_loads_over_get_flows(api_only_settings, api_flows, fake_urlopen, monkeypatch):
+    s = FlowsSession(api_only_settings)
+    monkeypatch.setattr(server, "SESSION", s)
+
+    assert "http://nodered.test:1880/flows" in s.reload()
+    assert TAB in query(op="tabs")
+
+    get = fake_urlopen[0]
+    assert get.get_method() == "GET"
+    assert get.headers["Node-red-api-version"] == "v2"
+    assert s.flows.rev == "rev-1"
+
+
+def test_an_api_only_session_needs_no_flows_path(api_only_settings):
+    assert api_only_settings.flows_path == ""
+    assert api_only_settings.source == "admin_api"
+    FlowsSession(api_only_settings)  # constructs without touching the filesystem
+
+
+def test_api_only_deploy_echoes_the_rev_back(api_only_settings, api_flows, fake_urlopen, monkeypatch):
+    s = FlowsSession(api_only_settings)
+    monkeypatch.setattr(server, "SESSION", s)
+    edit(op="rename_node", node_id=FUNC, name="over-api")
+    assert session_tool(op="deploy")["ok"] is True
+
+    post = fake_urlopen[-1]
+    assert post.get_method() == "POST"
+    assert post.headers["Node-red-api-version"] == "v2"
+    body = json.loads(post.data)
+    assert body["rev"] == "rev-1"
+    assert any(n.get("name") == "over-api" for n in body["flows"])
+    # The revision the deploy produced becomes ours, or the next one conflicts.
+    assert s.flows.rev == "rev-2"
+
+
+def test_api_only_save_refuses_because_there_is_no_file(api_only_settings, api_flows, monkeypatch):
+    s = FlowsSession(api_only_settings)
+    monkeypatch.setattr(server, "SESSION", s)
+    edit(op="rename_node", node_id=FUNC, name="over-api")
+
+    res = session_tool(op="save")
+    assert res["ok"] is False
+    assert "no local flows.json" in res["message"]
+
+
+def test_a_409_from_node_red_is_reported_as_stale(api_only_settings, api_flows, fake_urlopen, monkeypatch):
+    """Node-RED's own revision check is the staleness guard in API mode."""
+    s = FlowsSession(api_only_settings)
+    monkeypatch.setattr(server, "SESSION", s)
+    edit(op="rename_node", node_id=FUNC, name="mine")
+
+    fake_urlopen.fail = urllib.error.HTTPError(
+        "http://nodered.test:1880/flows", 409, "Conflict", {}, io.BytesIO(b"")
+    )
+    res = session_tool(op="deploy")
+    assert res["ok"] is False and res["error"] == "stale_file"
+    assert "changed by someone else" in res["message"]
+
+
+def test_force_drops_the_rev_so_node_red_skips_its_check(
+    api_only_settings, api_flows, fake_urlopen, monkeypatch
+):
+    s = FlowsSession(api_only_settings)
+    monkeypatch.setattr(server, "SESSION", s)
+    edit(op="rename_node", node_id=FUNC, name="mine")
+
+    assert session_tool(op="deploy", force=True)["ok"] is True
+    post = [r for r in fake_urlopen if r.get_method() == "POST"][0]
+    body = json.loads(post.data)
+    assert isinstance(body, list), "a forced deploy must send the bare v1 array"
+    assert "Node-red-api-version" not in post.headers
+
+
+def test_a_v1_runtime_answering_with_a_bare_array_still_works(api_only_settings, fake_urlopen, monkeypatch):
+    """An older runtime ignores the v2 header and returns a plain list."""
+    fake_urlopen.body = json.dumps([{"id": TAB, "type": "tab", "label": "Demo"}]).encode()
+    fake_urlopen.status = 200
+
+    s = FlowsSession(api_only_settings)
+    monkeypatch.setattr(server, "SESSION", s)
+    s.reload()
+    assert s.flows.rev is None
+    assert TAB in query(op="tabs")
+
+
+# ── read-only mode ──
+
+
+def test_read_only_refuses_mutating_session_ops(settings, monkeypatch):
+    settings.read_only = True
+    monkeypatch.setattr(server, "SESSION", FlowsSession(settings))
+
+    for op in ("save", "deploy", "undo"):
+        res = session_tool(op=op)
+        assert res["ok"] is False and res["error"] == "read_only", op
+    # Reads still work.
+    assert session_tool(op="status")["read_only"] is True
+    assert session_tool(op="diff")["changed"] == []
+
+
+def test_read_only_refuses_mutating_layout_ops(settings, monkeypatch):
+    settings.read_only = True
+    monkeypatch.setattr(server, "SESSION", FlowsSession(settings))
+
+    assert layout_tool(op="fix")["error"] == "read_only"
+    assert layout_tool(op="arrange", tab_id=TAB)["error"] == "read_only"
+    assert layout_tool(op="check")["errors"] == 0  # reads unaffected
+
+
+def test_read_only_leaves_the_writing_tools_registered_when_off(sess):
+    assert edit(op="rename_node", node_id=FUNC, name="fine")["ok"] is True

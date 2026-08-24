@@ -1,18 +1,28 @@
 {
+  "_comment": "Simplest setup: point at a running Node-RED. Flows are read and deployed over its Admin API -- no file access, and Node-RED may be on another host.",
   "mcpServers": {
     "nodered": {
       "type": "stdio",
-      "command": "uv",
-      "args": [
-        "run",
-        "--directory",
-        "/media/cubxi/docker/projects/hass/nodered-mcp",
-        "nodered-mcp"
-      ],
+      "command": "uvx",
+      "args": ["nodered-mcp"],
       "env": {
-        "NODERED_FLOWS_PATH": "/home/cubxi/docker/volumes/nodered/data/flows.json",
+        "NODERED_URL": "http://localhost:1880",
+
+        "_comment_token": "Only if Node-RED's settings.js enables adminAuth.",
+        "NODERED_TOKEN": "",
+
+        "_comment_file": "Optional. Set to also keep a local flows.json in step, or use INSTEAD of NODERED_URL to work off the file alone.",
+        "NODERED_FLOWS_PATH": "",
+
+        "_comment_readonly": "Set to 1 to expose only the read tools.",
+        "NODERED_READ_ONLY": "",
+
+        "_comment_style": "Optional JSON merged over Node-RED's default group style. Unset follows the editor theme.",
+        "NODERED_GROUP_STYLE": "",
+
+        "_comment_fallback": "Only used when NODERED_URL is unset: deploy falls back to docker cp + restart.",
         "NODERED_CONTAINER": "nodered",
-        "NODERED_RESTART_CMD": "/media/cubxi/docker/bin/dcwrap restart {container}"
+        "NODERED_RESTART_CMD": "docker compose restart {container}"
       }
     }
   }

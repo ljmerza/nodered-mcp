@@ -27,6 +27,7 @@ import os
 from dataclasses import dataclass, field
 
 from .config import Settings
+from .constants import StaleFlowsError
 from .flows import Flows
 
 
@@ -61,8 +62,9 @@ def _describe(node: dict) -> dict:
     return {"id": node.get("id"), "type": node.get("type"), "name": node.get("name", "")}
 
 
-class StaleFlowsError(RuntimeError):
-    """flows.json changed on disk while edits were pending in memory."""
+# Re-exported: `from nodered_mcp.session import StaleFlowsError` is the
+# historical import path and stays working.
+__all__ = ["FlowsSession", "Journal", "StaleFlowsError", "capture", "run"]
 
 
 class FlowsSession:
@@ -93,6 +95,9 @@ class FlowsSession:
             container=self.settings.container,
             container_flows_path=self.settings.container_flows_path,
             restart_cmd=self.settings.restart_cmd,
+            admin_url=self.settings.admin_url,
+            admin_token=self.settings.admin_token,
+            group_style=self.settings.group_style,
         )
         self._stamp = self._disk_stamp()
         self.journal.clear()
@@ -101,7 +106,8 @@ class FlowsSession:
         nodes = len(self._flows.nodes)
         if had:
             return f"Reloaded {nodes} nodes from disk. Discarded {had} pending edit(s)."
-        return f"Loaded {nodes} nodes from {self.settings.flows_path}"
+        where = self.settings.flows_path or f"{self.settings.admin_url}/flows"
+        return f"Loaded {nodes} nodes from {where}"
 
     def _disk_stamp(self) -> tuple[int, int] | None:
         """(mtime_ns, size) identity for flows.json.
@@ -118,11 +124,31 @@ class FlowsSession:
         return (st.st_mtime_ns, st.st_size)
 
     def externally_changed(self) -> bool:
-        """True if something else wrote flows.json since we loaded it."""
+        """True if something else wrote flows.json since we loaded it.
+
+        The cheap check is the stamp. A mismatch is then confirmed against the
+        file's actual content, because not every write is somebody else's
+        work: after an Admin API deploy Node-RED persists the very flows it
+        was just handed, back to the same file, with its own formatting and a
+        fresh mtime. Treating that as a conflict would make the write after
+        every deploy fail for no reason.
+        """
         if self._stamp is None:
             return False
         current = self._disk_stamp()
-        return current is not None and current != self._stamp
+        if current is None or current == self._stamp:
+            return False
+        return not self._matches_baseline()
+
+    def _matches_baseline(self) -> bool:
+        """True if flows.json on disk still parses to what we last knew it to be."""
+        if self._baseline is None:
+            return False
+        try:
+            with open(self.settings.flows_path) as fh:
+                return json.load(fh) == self._baseline
+        except (OSError, ValueError):
+            return False
 
     def assert_writable(self, force: bool = False) -> None:
         """Refuse to commit over someone else's newer flows.json."""
@@ -143,7 +169,7 @@ class FlowsSession:
         self.assert_writable(force=force)
         with capture() as out:
             if deploy:
-                self.flows.deploy(allow_overlap=allow_overlap)
+                self.flows.deploy(allow_overlap=allow_overlap, force=force)
             else:
                 self.flows.save(allow_overlap=allow_overlap)
         committed = len(self.journal.entries)
@@ -245,6 +271,7 @@ class FlowsSession:
             "pending_edits": list(self.journal.entries),
             "undo_steps": len(self._undo),
             "file_changed_on_disk": self.externally_changed(),
+            "rev": self._flows.rev if loaded else None,
         }
 
 

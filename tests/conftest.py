@@ -20,6 +20,19 @@ ORPHAN = "orp0000000000001"
 HA_NODE = "ha00000000000001"
 
 
+@pytest.fixture(autouse=True)
+def isolated_user_dir(tmp_path, monkeypatch):
+    """Never let flow-file discovery see the real ~/.node-red.
+
+    Autouse: a developer who happens to run Node-RED natively would otherwise
+    get different results from this suite than CI does.
+    """
+    empty = tmp_path / "no-node-red"
+    empty.mkdir()
+    monkeypatch.setattr("nodered_mcp.config.DEFAULT_USER_DIR", empty)
+    return empty
+
+
 @pytest.fixture
 def flows_file(tmp_path):
     """A disposable copy of the fixture flows.json."""
@@ -34,9 +47,89 @@ def settings(flows_file):
 
 
 @pytest.fixture
+def admin_settings(flows_file):
+    """Settings that route deploy over the Node-RED Admin API."""
+    return Settings(flows_path=str(flows_file), admin_url="http://nodered.test:1880")
+
+
+@pytest.fixture
+def api_only_settings():
+    """Settings with no local file at all -- flows come from the Admin API."""
+    return Settings(flows_path="", admin_url="http://nodered.test:1880")
+
+
+@pytest.fixture
+def api_flows(fake_urlopen):
+    """Serve the fixture flows over the fake Admin API, v2 style.
+
+    Returns the mutable dict backing the responses, so a test can change the
+    served rev to simulate somebody else deploying.
+    """
+    state = {"rev": "rev-1", "flows": json.loads(FIXTURE.read_text())}
+
+    def body(req):
+        if req.get_method() == "GET":
+            return json.dumps(state).encode()
+        return json.dumps({"rev": "rev-2"}).encode()
+
+    fake_urlopen.body = body
+    fake_urlopen.status = 200
+    return state
+
+
+@pytest.fixture
+def fake_urlopen(monkeypatch):
+    """Capture Admin API requests instead of making them.
+
+    Returns the list the captured urllib Requests land in; set .fail on it to
+    an exception to make urlopen raise that instead.
+    """
+
+    class Response:
+        status = 204
+        body = b""
+
+        def read(self):
+            return self.body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    class Calls(list):
+        fail = None  # set to an exception to make the next urlopen raise
+        status = 204
+        body = b""  # bytes, or a callable(req) -> bytes for per-request bodies
+
+    calls = Calls()
+
+    def urlopen(req, timeout=None):
+        calls.append(req)
+        if calls.fail is not None:
+            raise calls.fail
+        resp = Response()
+        resp.status = calls.status
+        resp.body = calls.body(req) if callable(calls.body) else calls.body
+        return resp
+
+    monkeypatch.setattr("nodered_mcp.persist.urllib.request.urlopen", urlopen)
+    return calls
+
+
+@pytest.fixture
 def sess(settings, monkeypatch):
     """A live session wired into the server module, as main() would."""
     s = FlowsSession(settings)
+    monkeypatch.setattr(server, "SESSION", s)
+    return s
+
+
+@pytest.fixture
+def admin_sess(admin_settings, monkeypatch):
+    """A live session whose deploy goes over the Admin API."""
+    s = FlowsSession(admin_settings)
     monkeypatch.setattr(server, "SESSION", s)
     return s
 

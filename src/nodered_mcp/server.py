@@ -29,7 +29,7 @@ from pydantic import Field
 
 from . import layout
 from .config import build_parser, settings_from_args
-from .flows import DEFAULT_GROUP_STYLE, LayoutError
+from .flows import DeployError, LayoutError
 from .session import FlowsSession, StaleFlowsError, capture, run
 
 mcp = FastMCP(name="nodered", instructions=__doc__)
@@ -514,7 +514,7 @@ def nodered_group(
         _need(group_id, op, "group_id")
         text, _ = run(f.set_group_style, group_id, style)
         s.journal.record(f"set_group_style {group_id}")
-        return {"ok": True, "style": style or DEFAULT_GROUP_STYLE, "output": text}
+        return {"ok": True, "style": style or f.group_style, "output": text}
 
     if op == "normalize_styles":
         text, _ = run(f.normalize_group_styles, style)
@@ -654,6 +654,30 @@ def nodered_tab(
 # ──────────────────────────────────────────────────────────────────────
 
 
+# Tools that exist only to change things. --read-only unregisters them
+# outright, so a client never sees a tool it is not allowed to call.
+MUTATING_TOOLS = ("nodered_edit", "nodered_group", "nodered_tab")
+
+# Mutating ops inside tools whose other ops are read-only, guarded per call.
+MUTATING_OPS = {
+    "nodered_layout": {"arrange", "fix"},
+    "nodered_session": {"save", "deploy", "undo"},
+}
+
+
+def _refuse_read_only(tool, op):
+    """None if the op is allowed, otherwise the refusal to return."""
+    if not session().settings.read_only or op not in MUTATING_OPS.get(tool, ()):
+        return None
+    return {
+        "ok": False,
+        "error": "read_only",
+        "message": f"{op!r} would change the flows, and this server was started "
+        f"read-only. Restart it without --read-only / NODERED_READ_ONLY to make "
+        f"changes.",
+    }
+
+
 @mcp.tool
 @undoable
 def nodered_layout(
@@ -715,6 +739,10 @@ def nodered_layout(
     Always call op='free_region' before creating nodes, and lay them out
     relative to the returned origin instead of guessing coordinates.
     """
+    refusal = _refuse_read_only("nodered_layout", op)
+    if refusal:
+        return refusal
+
     s = session()
     f = s.flows
 
@@ -813,9 +841,9 @@ def nodered_session(
             description=(
                 "status: config + pending edits + whether the file changed on disk. "
                 "diff: what the pending edits would change, per node. undo: roll back "
-                "the last mutating call. save: write flows.json. deploy: write, docker "
-                "cp into the container, and restart it. reload: discard pending edits "
-                "and re-read from disk."
+                "the last mutating call. save: write flows.json -- Node-RED does not "
+                "pick it up until it reloads. deploy: write it AND make the running "
+                "Node-RED apply it. reload: discard pending edits and re-read from disk."
             )
         ),
     ] = "status",
@@ -846,8 +874,14 @@ def nodered_session(
     and refuses to write if the edit introduces a NEW error-level problem
     (groups overlapping, a group box that no longer covers its own nodes).
     Pre-existing problems never block. deploy() runs the same gate, then
-    restarts Node-RED.
+    hands the flows to the running Node-RED -- over its Admin API when a URL
+    is configured, otherwise by copying them into the container and restarting
+    it. session(op='status') reports which route is in use.
     """
+    refusal = _refuse_read_only("nodered_session", op)
+    if refusal:
+        return refusal
+
     s = session()
 
     if op == "status":
@@ -875,6 +909,17 @@ def nodered_session(
         }
     except StaleFlowsError as exc:
         return {"ok": False, "error": "stale_file", "message": str(exc)}
+    except DeployError as exc:
+        # The edits are still in memory and, for the Admin API route, already
+        # on disk -- say so, so the model doesn't redo the whole build.
+        return {
+            "ok": False,
+            "error": "deploy_failed",
+            "message": str(exc),
+            "hint": "The edits are still pending in this session. Fix the connection "
+            "or configuration and retry session(op='deploy'), or session(op='save') "
+            "to write flows.json without pushing it.",
+        }
 
     return {"ok": True, "op": op, "output": text}
 
@@ -889,13 +934,23 @@ def main(argv=None) -> int:
     # Fail fast on an unreadable/invalid flows.json rather than at first tool call.
     # reload() RETURNS its summary; capture() is only here to swallow anything the
     # engine might print, which must never reach stdout on stdio transport.
+    if settings.read_only:
+        for name in MUTATING_TOOLS:
+            mcp.remove_tool(name)
+
     with capture():
         try:
             loaded = SESSION.reload()
+        except DeployError as exc:
+            print(f"nodered-mcp: {exc}", file=sys.stderr)
+            return 2
         except (OSError, ValueError, json.JSONDecodeError) as exc:
-            print(f"nodered-mcp: cannot read {settings.flows_path}: {exc}", file=sys.stderr)
+            source = settings.flows_path or f"{settings.admin_url}/flows"
+            print(f"nodered-mcp: cannot read {source}: {exc}", file=sys.stderr)
             return 2
     print(f"nodered-mcp: {loaded}", file=sys.stderr)
+    if settings.read_only:
+        print("nodered-mcp: read-only; editing tools are not registered", file=sys.stderr)
 
     if args.transport == "stdio":
         mcp.run()

@@ -47,13 +47,14 @@ class NodeEditMixin:
     def create_config_node(self, node_type, name, config=None):
         """Create a config node. Returns the new node's ID.
 
-        Config nodes -- an `server` for Home Assistant, an `mqtt-broker`, a
-        `tls-config` -- belong to no tab, occupy no canvas, and carry no
-        wires. Other nodes point at them by id, so create one first and pass
-        its id in the referring node's config:
+        Config nodes -- an `mqtt-broker`, a `tls-config`, an `influxdb`, or
+        whatever a contrib palette calls its connection node -- belong to no
+        tab, occupy no canvas, and carry no wires. Other nodes point at them
+        by id, so create one first and pass its id in the referring node's
+        config, under whatever property that node type expects:
 
-            sid = f.create_config_node("server", "Home Assistant")
-            f.create_node(tab, "api-call-service", "turn on", config={"server": sid})
+            bid = f.create_config_node("mqtt-broker", "local", {"broker": "localhost"})
+            f.create_node(tab, "mqtt out", "publish", config={"broker": bid})
 
         Args:
             node_type: Node-RED config node type.

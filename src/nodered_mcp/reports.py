@@ -218,9 +218,10 @@ class ReadMixin:
     def config_nodes(self):
         """List config nodes and the nodes that reference them.
 
-        A config node is what a flow node points at for a connection: the
-        Home Assistant `server`, an `mqtt-broker`, a `tls-config`. They never
+        A config node is what a flow node points at for a connection: an
+        `mqtt-broker`, a `tls-config`, a Home Assistant `server`. They never
         appear on a canvas, so none of the tab-oriented reports show them.
+        Detection is structural, so contrib palettes are covered too.
         """
         configs = [n for n in self.nodes if self._is_config_node(n)]
         if not configs:
@@ -340,7 +341,11 @@ class ReadMixin:
         _walk(node_id, 0)
 
     def entities(self):
-        """List all Home Assistant entity IDs referenced across all flows."""
+        """List all Home Assistant entity IDs referenced across all flows.
+
+        Specific to the node-red-contrib-home-assistant-websocket palette;
+        a flow set that doesn't use it simply reports none.
+        """
         entity_refs = defaultdict(list)
         entity_fields = ["entity_id", "entityid", "entityidfilter"]
         for n in self.nodes:
