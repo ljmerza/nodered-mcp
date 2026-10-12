@@ -104,9 +104,11 @@ def fake_urlopen(monkeypatch):
         body = b""  # bytes, or a callable(req) -> bytes for per-request bodies
 
     calls = Calls()
+    calls.contexts = []  # the ssl context passed with each request, None if none
 
-    def urlopen(req, timeout=None):
+    def urlopen(req, timeout=None, context=None):
         calls.append(req)
+        calls.contexts.append(context)
         if calls.fail is not None:
             raise calls.fail
         resp = Response()

@@ -98,6 +98,9 @@ class FlowsSession:
             admin_url=self.settings.admin_url,
             admin_token=self.settings.admin_token,
             group_style=self.settings.group_style,
+            admin_username=self.settings.admin_username,
+            admin_password=self.settings.admin_password,
+            admin_insecure=self.settings.admin_insecure,
         )
         self._stamp = self._disk_stamp()
         self.journal.clear()

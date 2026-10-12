@@ -1,5 +1,7 @@
+import base64
 import io
 import json
+import ssl
 import subprocess
 import urllib.error
 
@@ -427,6 +429,35 @@ def test_admin_deploy_sends_a_bearer_token_when_configured(admin_settings, fake_
     assert fake_urlopen[0].headers["Authorization"] == "Bearer s3cret"
 
 
+def test_admin_deploy_sends_basic_auth_when_configured(admin_settings, fake_urlopen, monkeypatch):
+    admin_settings.admin_username = "nr"
+    admin_settings.admin_password = "pw"
+    monkeypatch.setattr(server, "SESSION", FlowsSession(admin_settings))
+    session_tool(op="deploy")
+    assert fake_urlopen[0].headers["Authorization"] == "Basic " + base64.b64encode(b"nr:pw").decode()
+
+
+def test_admin_deploy_prefers_the_token_over_basic_auth(admin_settings, fake_urlopen, monkeypatch):
+    admin_settings.admin_token = "s3cret"
+    admin_settings.admin_username = "nr"
+    monkeypatch.setattr(server, "SESSION", FlowsSession(admin_settings))
+    session_tool(op="deploy")
+    assert fake_urlopen[0].headers["Authorization"] == "Bearer s3cret"
+
+
+def test_admin_deploy_verifies_tls_by_default(admin_sess, fake_urlopen):
+    session_tool(op="deploy")
+    assert fake_urlopen.contexts == [None]
+
+
+def test_admin_deploy_can_skip_tls_verification(admin_settings, fake_urlopen, monkeypatch):
+    admin_settings.admin_insecure = True
+    monkeypatch.setattr(server, "SESSION", FlowsSession(admin_settings))
+    session_tool(op="deploy")
+    (ctx,) = fake_urlopen.contexts
+    assert ctx.verify_mode == ssl.CERT_NONE and ctx.check_hostname is False
+
+
 def test_admin_deploy_runs_the_layout_gate(admin_sess, fake_urlopen):
     """A deploy that would introduce an overlap never reaches the network."""
     _overlapping_group(admin_sess)
@@ -442,6 +473,7 @@ def test_admin_deploy_401_points_at_the_token_flag(admin_sess, fake_urlopen):
     res = session_tool(op="deploy")
     assert res["ok"] is False and res["error"] == "deploy_failed"
     assert "--nodered-token" in res["message"]
+    assert "--nodered-username" in res["message"]
 
 
 def test_admin_deploy_404_points_at_the_url_flag(admin_sess, fake_urlopen):
@@ -1054,3 +1086,37 @@ def test_read_only_refuses_mutating_layout_ops(settings, monkeypatch):
 
 def test_read_only_leaves_the_writing_tools_registered_when_off(sess):
     assert edit(op="rename_node", node_id=FUNC, name="fine")["ok"] is True
+
+
+# ── client auth on the http transports ──
+
+
+@pytest.fixture
+def run_main(monkeypatch, flows_file):
+    """Run server.main() up to mcp.run, returning the kwargs it was called with."""
+    monkeypatch.setattr(server, "SESSION", None)
+    monkeypatch.setattr(server.mcp, "auth", None)
+    calls = []
+    monkeypatch.setattr(server.mcp, "run", lambda **kw: calls.append(kw))
+
+    def run(*argv):
+        assert server.main(["--flows-path", str(flows_file), *argv]) == 0
+        return calls[-1]
+
+    return run
+
+
+def test_http_with_an_auth_token_requires_it(run_main):
+    run_main("--transport", "http", "--auth-token", "client-secret")
+    assert set(server.mcp.auth.tokens) == {"client-secret"}
+
+
+def test_http_without_an_auth_token_is_open_and_says_so(run_main, capsys):
+    run_main("--transport", "http")
+    assert server.mcp.auth is None
+    assert "no --auth-token" in capsys.readouterr().err
+
+
+def test_stdio_ignores_the_auth_token(run_main):
+    assert run_main("--auth-token", "client-secret") == {}
+    assert server.mcp.auth is None

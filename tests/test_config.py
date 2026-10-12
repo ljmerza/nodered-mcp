@@ -107,6 +107,47 @@ def test_describe_never_echoes_the_token(monkeypatch, flows_file):
     assert described["authenticated"] is True
 
 
+def test_basic_auth_comes_from_flags_or_environment(monkeypatch, flows_file):
+    monkeypatch.setenv("NODERED_USERNAME", "env-user")
+    monkeypatch.setenv("NODERED_PASSWORD", "env-pw")
+    base = ["--flows-path", str(flows_file), "--nodered-url", "http://pi.local:1880"]
+    s = settings_from_args(build_parser().parse_args(base))
+    assert (s.admin_username, s.admin_password) == ("env-user", "env-pw")
+    s = settings_from_args(build_parser().parse_args([*base, "--nodered-username", "flag-user"]))
+    assert s.admin_username == "flag-user"
+
+
+def test_describe_never_echoes_the_basic_password(monkeypatch, flows_file):
+    args = build_parser().parse_args(
+        [
+            "--flows-path",
+            str(flows_file),
+            "--nodered-url",
+            "http://pi.local:1880",
+            "--nodered-username",
+            "nr",
+            "--nodered-password",
+            "hunter2",
+        ]
+    )
+    described = settings_from_args(args).describe()
+    assert "hunter2" not in repr(described)
+    assert described["authenticated"] is True
+
+
+@pytest.mark.parametrize("value, expected", [("", False), ("true", True), ("1", True), ("no", False)])
+def test_insecure_comes_from_the_environment(monkeypatch, flows_file, value, expected):
+    monkeypatch.setenv("NODERED_INSECURE", value)
+    s = settings_from_args(build_parser().parse_args(["--flows-path", str(flows_file)]))
+    assert s.admin_insecure is expected
+
+
+def test_auth_token_comes_from_flag_or_environment(monkeypatch):
+    monkeypatch.setenv("NODERED_MCP_AUTH_TOKEN", "from-env")
+    assert build_parser().parse_args([]).auth_token == "from-env"
+    assert build_parser().parse_args(["--auth-token", "from-flag"]).auth_token == "from-flag"
+
+
 # ── finding the flow file ──
 
 

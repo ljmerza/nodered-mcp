@@ -1,7 +1,9 @@
 """Writing flows.json back out, and the layout gate that guards it."""
 
+import base64
 import json
 import os
+import ssl
 import subprocess
 import tempfile
 import urllib.error
@@ -189,10 +191,16 @@ class PersistMixin:
             hdrs["Content-Type"] = "application/json"
         if self.admin_token:
             hdrs["Authorization"] = f"Bearer {self.admin_token}"
+        elif self.admin_username:
+            creds = f"{self.admin_username}:{self.admin_password}".encode()
+            hdrs["Authorization"] = f"Basic {base64.b64encode(creds).decode()}"
 
+        # Only pass a context when verification is off, so the default stays
+        # whatever urllib would have done on its own.
+        kwargs = {"context": _unverified_context()} if self.admin_insecure else {}
         req = urllib.request.Request(url, data=data, headers=hdrs, method=method)
         try:
-            with urllib.request.urlopen(req, timeout=ADMIN_TIMEOUT) as resp:
+            with urllib.request.urlopen(req, timeout=ADMIN_TIMEOUT, **kwargs) as resp:
                 return resp.status, resp.read()
         except urllib.error.HTTPError as exc:
             if exc.code == 409:
@@ -247,6 +255,14 @@ class PersistMixin:
             raise DeployError(f"`{' '.join(cmd)}` failed with exit code {exc.returncode}.") from exc
 
 
+def _unverified_context():
+    """TLS without certificate checks, for a Node-RED reached by a name its cert does not cover."""
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    return ctx
+
+
 def _http_error_hint(exc, url):
     """Turn an HTTPError from the Admin API into something actionable."""
     detail = ""
@@ -256,8 +272,10 @@ def _http_error_hint(exc, url):
         pass
     if exc.code == 401:
         return (
-            f"Node-RED at {url} rejected the request as unauthorized. adminAuth is "
-            f"enabled, so pass an access token with --nodered-token / NODERED_TOKEN."
+            f"Node-RED at {url} rejected the request as unauthorized. If adminAuth is "
+            f"enabled, pass an access token with --nodered-token / NODERED_TOKEN. If a "
+            f"proxy asks for a login (the Home Assistant add-on does), pass "
+            f"--nodered-username and --nodered-password instead."
         )
     if exc.code == 404:
         return (

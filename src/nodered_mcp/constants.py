@@ -13,6 +13,11 @@ CONTAINER_NAME = os.environ.get("NODERED_CONTAINER", "nodered")
 CONTAINER_FLOWS_PATH = os.environ.get("NODERED_CONTAINER_FLOWS_PATH", "/data/flows.json")
 ADMIN_URL = os.environ.get("NODERED_URL") or ""
 ADMIN_TOKEN = os.environ.get("NODERED_TOKEN") or ""
+# HTTP Basic credentials, for a Node-RED behind a proxy that asks for them --
+# the Home Assistant add-on turns adminAuth off and puts nginx in front instead.
+ADMIN_USERNAME = os.environ.get("NODERED_USERNAME") or ""
+ADMIN_PASSWORD = os.environ.get("NODERED_PASSWORD") or ""
+ADMIN_INSECURE = os.environ.get("NODERED_INSECURE", "").lower() in ("1", "true", "yes")
 
 # Seconds to wait on the Admin API. A full deploy stops and restarts every
 # node, so a big flow set on a Pi can legitimately take a while to answer.

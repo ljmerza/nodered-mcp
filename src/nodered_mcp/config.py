@@ -51,6 +51,9 @@ class Settings:
     restart_cmd: list[str] = field(default_factory=list)
     admin_url: str = ""
     admin_token: str = ""
+    admin_username: str = ""
+    admin_password: str = ""
+    admin_insecure: bool = False
     group_style: dict = field(default_factory=dict)
     read_only: bool = False
 
@@ -77,7 +80,9 @@ class Settings:
         if self.admin_url:
             # Never echo the token; only whether one is configured.
             d["nodered_url"] = self.admin_url
-            d["authenticated"] = bool(self.admin_token)
+            d["authenticated"] = bool(self.admin_token or self.admin_username)
+            if self.admin_insecure:
+                d["tls_verify"] = False
         else:
             d["container"] = self.container
             d["container_flows_path"] = self.container_flows_path
@@ -127,6 +132,24 @@ def build_parser() -> argparse.ArgumentParser:
         help="Admin API access token, if Node-RED has adminAuth enabled. Env: NODERED_TOKEN",
     )
     ap.add_argument(
+        "--nodered-username",
+        default=os.environ.get("NODERED_USERNAME"),
+        help="Username sent as HTTP Basic auth, for a Node-RED behind a proxy that asks "
+        "for a login (the Home Assistant add-on does). Env: NODERED_USERNAME",
+    )
+    ap.add_argument(
+        "--nodered-password",
+        default=os.environ.get("NODERED_PASSWORD"),
+        help="Password for --nodered-username. Env: NODERED_PASSWORD",
+    )
+    ap.add_argument(
+        "--nodered-insecure",
+        action="store_true",
+        default=os.environ.get("NODERED_INSECURE", "").lower() in ("1", "true", "yes"),
+        help="Skip TLS certificate verification for --nodered-url, e.g. when reaching "
+        "Node-RED by a hostname its certificate does not cover. Env: NODERED_INSECURE",
+    )
+    ap.add_argument(
         "--group-style",
         default=os.environ.get("NODERED_GROUP_STYLE"),
         help="JSON object merged over Node-RED's default style for groups this server "
@@ -156,6 +179,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=int(os.environ.get("NODERED_MCP_PORT", "8080")),
         help="Bind port for http/sse transports (default: 8080).",
     )
+    ap.add_argument(
+        "--auth-token",
+        default=os.environ.get("NODERED_MCP_AUTH_TOKEN"),
+        help="Require MCP clients to send 'Authorization: Bearer <token>'. Only applies "
+        "to the http and sse transports. Env: NODERED_MCP_AUTH_TOKEN",
+    )
     return ap
 
 
@@ -180,6 +209,9 @@ def settings_from_args(args: argparse.Namespace) -> Settings:
         restart_cmd=restart_cmd,
         admin_url=admin_url,
         admin_token=args.nodered_token or "",
+        admin_username=args.nodered_username or "",
+        admin_password=args.nodered_password or "",
+        admin_insecure=bool(args.nodered_insecure),
         group_style=group_style,
         read_only=bool(args.read_only),
     )

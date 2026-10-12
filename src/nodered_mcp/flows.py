@@ -62,8 +62,11 @@ import json
 import sys
 
 from .constants import (
+    ADMIN_INSECURE,
+    ADMIN_PASSWORD,
     ADMIN_TOKEN,
     ADMIN_URL,
+    ADMIN_USERNAME,
     CONTAINER_FLOWS_PATH,
     CONTAINER_NAME,
     DEFAULT_GROUP_STYLE,
@@ -109,6 +112,9 @@ class Flows(ReadMixin, NodeEditMixin, GroupMixin, TabMixin, LayoutMixin, Transfe
         admin_url=None,
         admin_token=None,
         group_style=None,
+        admin_username=None,
+        admin_password=None,
+        admin_insecure=None,
     ):
         self.path = path or FLOWS_PATH or ""
         self.container = container or CONTAINER_NAME
@@ -117,6 +123,9 @@ class Flows(ReadMixin, NodeEditMixin, GroupMixin, TabMixin, LayoutMixin, Transfe
         # Set admin_url and deploy() goes over the Admin API instead of docker.
         self.admin_url = (admin_url if admin_url is not None else ADMIN_URL).rstrip("/")
         self.admin_token = admin_token if admin_token is not None else ADMIN_TOKEN
+        self.admin_username = admin_username if admin_username is not None else ADMIN_USERNAME
+        self.admin_password = admin_password if admin_password is not None else ADMIN_PASSWORD
+        self.admin_insecure = admin_insecure if admin_insecure is not None else ADMIN_INSECURE
         self.group_style = default_group_style(group_style)
         if not self.path and not self.admin_url:
             raise ValueError(

@@ -25,6 +25,7 @@ import sys
 from typing import Annotated, Any, Literal
 
 from fastmcp import FastMCP
+from fastmcp.server.auth.providers.jwt import StaticTokenVerifier
 from pydantic import Field
 
 from . import layout
@@ -954,8 +955,17 @@ def main(argv=None) -> int:
 
     if args.transport == "stdio":
         mcp.run()
+        return 0
+
+    if args.auth_token:
+        mcp.auth = StaticTokenVerifier(tokens={args.auth_token: {"client_id": "mcp-client", "scopes": []}})
     else:
-        mcp.run(transport=args.transport, host=args.host, port=args.port)
+        print(
+            "nodered-mcp: no --auth-token set; anything that can reach "
+            f"{args.host}:{args.port} can use these tools",
+            file=sys.stderr,
+        )
+    mcp.run(transport=args.transport, host=args.host, port=args.port)
     return 0
 
 
