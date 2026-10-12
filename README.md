@@ -61,7 +61,9 @@ You do not need to install anything. `uvx` will fetch and run it:
 uvx nodered-mcp --nodered-url http://localhost:1880
 ```
 
-You can also `pip install nodered-mcp`. To work on the package itself:
+You can also `pip install nodered-mcp`, run the [Docker image](#docker), or
+install the [Home Assistant add-on](#home-assistant-add-on). To work on the
+package itself:
 
 ```bash
 git clone https://github.com/ljmerza/nodered-mcp
@@ -119,10 +121,13 @@ in that order of priority.
 | `--nodered-url` | `NODERED_URL` | *(unset)* | Base URL of the running Node-RED. Reads flows and deploys over its Admin API |
 | `--flows-path` | `NODERED_FLOWS_PATH` | *(discovered)* | Path to `flows.json`. Optional when `--nodered-url` is set |
 | `--nodered-token` | `NODERED_TOKEN` | *(unset)* | Admin API token, if `adminAuth` is enabled |
+| `--nodered-username` / `--nodered-password` | `NODERED_USERNAME` / `NODERED_PASSWORD` | *(unset)* | HTTP Basic login, for a Node-RED behind a proxy that asks for one |
+| `--nodered-insecure` | `NODERED_INSECURE` | `false` | Skip TLS certificate verification for `--nodered-url` |
 | `--read-only` | `NODERED_READ_ONLY` | `false` | Only expose the read tools |
 | `--group-style` | `NODERED_GROUP_STYLE` | *(editor theme)* | JSON merged over Node-RED's default style for new groups |
 | `--transport` | `NODERED_MCP_TRANSPORT` | `stdio` | `stdio`, `http`, or `sse` |
 | `--host` / `--port` | `NODERED_MCP_HOST` / `NODERED_MCP_PORT` | `127.0.0.1` / `8080` | Bind address for `http` and `sse` |
+| `--auth-token` | `NODERED_MCP_AUTH_TOKEN` | *(unset)* | Bearer token MCP clients must send on `http` and `sse` |
 
 These only apply to the fallback deploy route described below:
 
@@ -147,6 +152,17 @@ work. You can override this with `session(op='deploy', force=true)`.
 If you set `--flows-path` instead, the server reads the file. The equivalent
 check compares the file against what was loaded, which catches a deploy from
 the browser the same way.
+
+### Serving over HTTP
+
+With `--transport http`, the MCP endpoint is at `http://<host>:<port>/mcp`.
+Anything that can reach it can edit and deploy your flows, so set
+`--auth-token` and clients will need to send `Authorization: Bearer <token>`:
+
+```bash
+claude mcp add --transport http nodered http://nodered-mcp.lan:8080/mcp \
+  --header "Authorization: Bearer <token>"
+```
 
 ### Group styling
 
@@ -208,6 +224,39 @@ NODERED_RESTART_CMD="docker compose restart {container}"
 ```
 
 Run `session(op='status')` to see which route is configured.
+
+## Docker
+
+The image serves MCP over HTTP on port 8080 and reads the flows over the Admin
+API. It is published for amd64 and arm64:
+
+```bash
+docker run -d --name nodered-mcp -p 8080:8080 \
+  -e NODERED_URL=http://nodered:1880 \
+  -e NODERED_MCP_AUTH_TOKEN=change-me \
+  ghcr.io/ljmerza/nodered-mcp
+```
+
+Every setting in the [configuration table](#configuration) works as an
+environment variable. The image has no Docker CLI, so it cannot use the
+fallback deploy route; give it `NODERED_URL`. If you mount a `flows.json` and
+set `NODERED_FLOWS_PATH` too, the file is kept in sync on each deploy.
+
+## Home Assistant add-on
+
+This repository is also a Home Assistant add-on repository. It connects to the
+community Node-RED add-on and exposes the MCP endpoint on port 8765.
+
+1. Go to **Settings → Add-ons → Add-on Store**, open the ⋮ menu, choose
+   **Repositories**, and add `https://github.com/ljmerza/nodered-mcp`.
+2. Install **Node-RED MCP**.
+3. On its **Configuration** tab, set `username` and `password` to a Home
+   Assistant user, and `auth_token` to a long random string.
+
+The Node-RED add-on turns off Node-RED's own login and instead puts a proxy on
+port 1880 that checks a Home Assistant login, which is why the add-on uses
+`--nodered-username` rather than a token. See
+[`home-assistant/DOCS.md`](home-assistant/DOCS.md) for the rest.
 
 ## Tools
 
@@ -387,6 +436,8 @@ src/nodered_mcp/
 ├── transfer.py     TransferMixin  — import and export node sets
 ├── persist.py      PersistMixin   — save, deploy, and the layout gate
 └── layout.py       canvas geometry and linter, ported from the NR editor
+home-assistant/     the Home Assistant add-on
+Dockerfile          the standalone container image
 ```
 
 `Flows` composes those mixins, so the public API stays flat: `f.summary()`,
@@ -410,6 +461,13 @@ stdio framing.
 
 CI runs the same checks through
 [`ljmerza/misc-actions`](https://github.com/ljmerza/misc-actions).
+
+A version tag publishes the package to PyPI and the image to GHCR. The
+Home Assistant add-on installs the PyPI release named by its own `version`, so
+bump `pyproject.toml` and `home-assistant/config.yaml` together, and add a line
+to `home-assistant/CHANGELOG.md`. Home Assistant offers the update once
+`config.yaml` changes on `main`, so merge the bump only after the release is on
+PyPI.
 
 ## Contributing
 

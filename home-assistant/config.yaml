@@ -1,0 +1,32 @@
+name: Node-RED MCP
+# Must match a nodered-mcp release on PyPI; build.yaml installs this version.
+version: "2.1.0"
+slug: nodered_mcp
+description: Read, edit, and deploy your Node-RED flows from an MCP client
+url: https://github.com/ljmerza/nodered-mcp
+arch:
+  - aarch64
+  - amd64
+init: false
+startup: application
+boot: auto
+ports:
+  8080/tcp: 8765
+ports_description:
+  8080/tcp: MCP endpoint (streamable HTTP at /mcp)
+options:
+  nodered_url: http://a0d7b954-nodered:1880
+  username: ""
+  password: ""
+  verify_ssl: true
+  read_only: false
+  auth_token: ""
+schema:
+  nodered_url: url
+  username: str?
+  password: password?
+  nodered_token: password?
+  verify_ssl: bool
+  read_only: bool
+  auth_token: password?
+  group_style: str?

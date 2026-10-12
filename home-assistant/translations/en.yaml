@@ -1,0 +1,40 @@
+configuration:
+  nodered_url:
+    name: Node-RED URL
+    description: >-
+      Base URL of Node-RED. The default reaches the community Node-RED add-on.
+      Use https:// if that add-on has SSL enabled, and include httpAdminRoot
+      if your settings.js sets one.
+  username:
+    name: Username
+    description: >-
+      Home Assistant user to log in to Node-RED with. The Node-RED add-on
+      checks it on every request, the same login its port 1880 asks for.
+  password:
+    name: Password
+    description: Password for the user above.
+  nodered_token:
+    name: Node-RED token
+    description: >-
+      Admin API token for a Node-RED that has its own adminAuth enabled. Not
+      needed for the Node-RED add-on.
+  verify_ssl:
+    name: Verify SSL
+    description: >-
+      Verify Node-RED's TLS certificate. Turn off when Node-RED's certificate
+      is issued for your domain rather than the add-on's hostname.
+  read_only:
+    name: Read only
+    description: Only expose the read tools. Nothing can be edited or deployed.
+  auth_token:
+    name: MCP auth token
+    description: >-
+      MCP clients must send "Authorization: Bearer <token>". Strongly
+      recommended, since the MCP endpoint can rewrite and deploy every flow.
+  group_style:
+    name: Group style
+    description: >-
+      JSON merged over Node-RED's default style for groups this server
+      creates, e.g. {"fill": "#2e333a"}. Leave empty to follow the editor theme.
+network:
+  8080/tcp: MCP endpoint (streamable HTTP at /mcp)
