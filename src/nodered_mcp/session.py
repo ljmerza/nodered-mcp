@@ -138,17 +138,25 @@ class FlowsSession:
         current = self._disk_stamp()
         if current is None or current == self._stamp:
             return False
-        return not self._matches_baseline()
+        return not self._matches_disk()
 
-    def _matches_baseline(self) -> bool:
-        """True if flows.json on disk still parses to what we last knew it to be."""
-        if self._baseline is None:
-            return False
+    def _matches_disk(self) -> bool:
+        """True if flows.json on disk is something this session already knows.
+
+        Either what we loaded (the baseline) or what we hold in memory now. The
+        second case is our own write that never got confirmed: an Admin API
+        deploy saves flows.json first, so if the push to Node-RED then fails the
+        file already holds the pending edits. That is not somebody else's work,
+        and calling it stale would make the obvious retry fail.
+        """
         try:
             with open(self.settings.flows_path) as fh:
-                return json.load(fh) == self._baseline
+                on_disk = json.load(fh)
         except (OSError, ValueError):
             return False
+        if self._baseline is not None and on_disk == self._baseline:
+            return True
+        return self._flows is not None and on_disk == self._flows.nodes
 
     def assert_writable(self, force: bool = False) -> None:
         """Refuse to commit over someone else's newer flows.json."""
