@@ -1,14 +1,26 @@
 """Writing flows.json back out, and the layout gate that guards it."""
 
+import http.client
 import json
 import os
 import subprocess
 import tempfile
+import time
 import urllib.error
 import urllib.request
 
 from . import layout
-from .constants import ADMIN_TIMEOUT, DeployError, LayoutError, StaleFlowsError
+from .constants import (
+    ADMIN_TIMEOUT,
+    DEPLOY_CONFIRM_TIMEOUT,
+    ConnectionDroppedError,
+    DeployError,
+    LayoutError,
+    StaleFlowsError,
+)
+
+# Seconds between GET /flows attempts while confirming a dropped deploy.
+CONFIRM_POLL_INTERVAL = 2.0
 
 
 class PersistMixin:
@@ -144,7 +156,24 @@ class PersistMixin:
             headers["Node-RED-API-Version"] = "v2"
             payload = {"rev": self.rev, "flows": self.nodes}
 
-        status, body = self._admin_request("POST", "/flows", payload=payload, headers=headers)
+        try:
+            status, body = self._admin_request("POST", "/flows", payload=payload, headers=headers)
+        except ConnectionDroppedError as exc:
+            # The request went out, so it may have landed: Node-RED usually drops
+            # the connection because it restarted while installing the flows.
+            # Ask it what it is running now instead of reporting a failure that
+            # didn't happen (or a success we can't vouch for).
+            if self._confirm_running_these_flows():
+                print(
+                    f"Node-RED dropped the connection mid-deploy ({exc}) but is now "
+                    f"running these {len(self.nodes)} nodes: the deploy landed."
+                )
+                return
+            raise DeployError(
+                f"{exc}. Could not confirm within {DEPLOY_CONFIRM_TIMEOUT:g}s that "
+                f"Node-RED is running these flows -- it may still be restarting, or "
+                f"the deploy may not have landed. Check Node-RED before retrying."
+            ) from exc
         if self.rev is not None and not force:
             # v2 answers 200 with the revision the deploy produced. Adopt it,
             # or the next deploy in this session 409s against its own write.
@@ -157,6 +186,32 @@ class PersistMixin:
             # next deploy in this session checks against a revision two writes old.
             _, self.rev = self.fetch_flows()
         print(f"Deployed {len(self.nodes)} nodes to {self.admin_url}/flows (HTTP {status})")
+
+    def _confirm_running_these_flows(self):
+        """After a dropped deploy: does the running Node-RED have our flows?
+
+        Polls GET /flows until DEPLOY_CONFIRM_TIMEOUT, since Node-RED may still be
+        coming back up. Compares the node ids, which a full deploy replaces as a
+        set -- Node-RED re-serialises the nodes itself, so a byte or dict
+        comparison would never match. Adopts the new rev on success so the next
+        deploy in this session doesn't conflict with its own write.
+        """
+        wanted = {n.get("id") for n in self.nodes}
+        deadline = time.monotonic() + DEPLOY_CONFIRM_TIMEOUT
+        while True:
+            try:
+                running, rev = self.fetch_flows()
+            except DeployError:
+                running = None  # not back up yet
+            if running is not None:
+                if {n.get("id") for n in running} == wanted:
+                    if self.rev is not None:
+                        self.rev = rev
+                    return True
+                return False  # up, but running something else
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(CONFIRM_POLL_INTERVAL)
 
     def fetch_flows(self):
         """GET the live flows and their revision. Returns (nodes, rev).
@@ -209,6 +264,14 @@ class PersistMixin:
                 f"could not reach the Node-RED Admin API at {url}: {exc.reason}. "
                 f"Check --nodered-url, and that Node-RED is running and reachable "
                 f"from this host."
+            ) from exc
+        except (http.client.HTTPException, ConnectionError) as exc:
+            # urllib only wraps errors raised while *sending* in URLError. A
+            # connection closed before the response (http.client.RemoteDisconnected,
+            # a ConnectionResetError) escapes raw, and used to surface as a bare
+            # "Remote end closed connection without response" tool error.
+            raise ConnectionDroppedError(
+                f"Node-RED closed the connection to {url} before answering ({exc})"
             ) from exc
         except TimeoutError as exc:
             raise DeployError(

@@ -18,6 +18,11 @@ ADMIN_TOKEN = os.environ.get("NODERED_TOKEN") or ""
 # node, so a big flow set on a Pi can legitimately take a while to answer.
 ADMIN_TIMEOUT = float(os.environ.get("NODERED_TIMEOUT", "30"))
 
+# When Node-RED drops the connection mid-deploy (it crashed or restarted while
+# installing the flows), keep asking GET /flows this long to find out whether
+# the deploy landed. A container restart typically takes 20-30 s.
+DEPLOY_CONFIRM_TIMEOUT = float(os.environ.get("NODERED_DEPLOY_CONFIRM_TIMEOUT", "60"))
+
 
 def default_restart_cmd(container):
     """Command used to restart Node-RED after a deploy.
@@ -70,6 +75,14 @@ class LayoutError(Exception):
 
 class DeployError(Exception):
     """Raised by deploy() when the flows never reached the running Node-RED."""
+
+
+class ConnectionDroppedError(DeployError):
+    """Node-RED closed the connection before answering.
+
+    Unlike an unreachable host, the request was sent, so it may well have
+    landed -- the usual cause is Node-RED restarting while installing it.
+    """
 
 
 class StaleFlowsError(RuntimeError):

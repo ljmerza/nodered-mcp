@@ -1,3 +1,4 @@
+import http.client
 import io
 import json
 import subprocess
@@ -450,6 +451,103 @@ def test_admin_deploy_404_points_at_the_url_flag(admin_sess, fake_urlopen):
     )
     res = session_tool(op="deploy")
     assert "httpAdminRoot" in res["message"]
+
+
+def _drop_the_post(monkeypatch, running, down_for=0):
+    """Fake Node-RED that dies mid-POST, then serves `running(posted)` on GET.
+
+    down_for: how many GETs fail (connection refused) before it is back up.
+    Returns the list of HTTP methods seen.
+    """
+    seen, state = [], {"posted": None, "down": down_for}
+
+    class Response:
+        status = 200
+
+        def __init__(self, body):
+            self.body = body
+
+        def read(self):
+            return self.body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    def urlopen(req, timeout=None):
+        seen.append(req.get_method())
+        if req.get_method() == "POST":
+            state["posted"] = json.loads(req.data)
+            raise http.client.RemoteDisconnected("Remote end closed connection without response")
+        if state["down"]:
+            state["down"] -= 1
+            raise urllib.error.URLError("Connection refused")
+        return Response(json.dumps({"rev": "rev-9", "flows": running(state["posted"])}).encode())
+
+    monkeypatch.setattr("nodered_mcp.persist.urllib.request.urlopen", urlopen)
+    monkeypatch.setattr("nodered_mcp.persist.time.sleep", lambda s: None)
+    return seen
+
+
+def test_admin_deploy_dropped_connection_that_landed_reports_success(admin_sess, monkeypatch):
+    """Node-RED restarted while installing the flows and came back running them."""
+    seen = _drop_the_post(monkeypatch, running=lambda posted: posted, down_for=2)
+    edit(op="rename_node", node_id=FUNC, name="deployed")
+
+    res = session_tool(op="deploy")
+    assert res["ok"] is True
+    assert "the deploy landed" in res["output"]
+    assert seen == ["POST", "GET", "GET", "GET"]
+    status = session_tool(op="status")
+    assert status["pending_edits"] == [] and status["file_changed_on_disk"] is False
+
+
+def test_admin_deploy_dropped_connection_running_other_flows_fails(admin_sess, monkeypatch):
+    _drop_the_post(monkeypatch, running=lambda posted: posted[:-1])
+    edit(op="rename_node", node_id=FUNC, name="deployed")
+
+    res = session_tool(op="deploy")
+    assert res["ok"] is False and res["error"] == "deploy_failed"
+    assert "closed the connection" in res["message"]
+    assert "Could not confirm" in res["message"]
+
+
+def test_admin_deploy_dropped_connection_never_back_up_fails(admin_sess, monkeypatch):
+    monkeypatch.setattr("nodered_mcp.persist.DEPLOY_CONFIRM_TIMEOUT", 0)
+    _drop_the_post(monkeypatch, running=lambda posted: posted, down_for=99)
+    res = session_tool(op="deploy")
+    assert res["ok"] is False and "Could not confirm" in res["message"]
+
+
+def test_failed_admin_deploy_is_not_mistaken_for_a_browser_deploy(admin_sess, fake_urlopen):
+    """The deploy already wrote flows.json before the push failed. That file is our
+    own pending work, so status must not call it changed on disk and a retry must
+    not be refused as stale."""
+    fake_urlopen.fail = urllib.error.URLError("Connection refused")
+    edit(op="rename_node", node_id=FUNC, name="deployed")
+    assert session_tool(op="deploy")["ok"] is False
+
+    status = session_tool(op="status")
+    assert status["file_changed_on_disk"] is False
+    assert status["pending_edits"]  # still not confirmed live
+
+    fake_urlopen.fail = None
+    assert session_tool(op="deploy")["ok"] is True
+
+
+def test_browser_deploy_is_still_caught_after_a_failed_admin_deploy(admin_sess, fake_urlopen, flows_file):
+    fake_urlopen.fail = urllib.error.URLError("Connection refused")
+    edit(op="rename_node", node_id=FUNC, name="deployed")
+    session_tool(op="deploy")
+
+    nodes = json.loads(flows_file.read_text())
+    nodes[0]["name"] = "someone else"
+    flows_file.write_text(json.dumps(nodes))
+    fake_urlopen.fail = None
+    res = session_tool(op="deploy")
+    assert res["ok"] is False and res["error"] == "stale_file"
 
 
 def test_admin_deploy_unreachable_keeps_the_edits_pending(admin_sess, fake_urlopen):
